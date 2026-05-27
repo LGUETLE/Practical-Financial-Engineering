@@ -36,146 +36,105 @@ def simulate_gbm(S0: float, sigma: float, r: float, delta: float,
 #  2. BASIS FUNCTIONS FOR THE MAX-OPTION (Table 8.1)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def basis_max(S1: np.ndarray, S2: np.ndarray, K: float,
-              s1_scale: float = None, s2_scale: float = None) -> tuple[np.ndarray, float, float]:
+def basis_max(S1: np.ndarray, S2: np.ndarray, K: float) -> np.ndarray:
     """
-    Generates basis functions for the max option.
-    Uses the final specification from Glasserman Table 8.1:
-    1, Si, Si^2, S1*S2, and the intrinsic value h(S1, S2).
+    Basis functions exactly matching Glasserman Table 8.1 (last row, Low = 13.78).
+    Includes: 1, S_i, S_i^2, S1*S2, h(S1, S2).
+    Manual scaling has been removed to prevent data leakage between train/price sets.
     """
-    # Calculate scaling factors to avoid numerical instability in the regression
-    if s1_scale is None:
-        s1_scale = float(S1.mean())
-    if s2_scale is None:
-        s2_scale = float(S2.mean())
-
-    s1 = S1 / s1_scale
-    s2 = S2 / s2_scale
-    
-    # Intrinsic value of the option: h(S1, S2) = (max(S1, S2) - K)^+
     h = np.maximum(np.maximum(S1, S2) - K, 0.0)
-    h_scale = max(h.mean(), 1e-8)
-    h_norm = h / h_scale
-
-    # Design matrix (Si implies both S1 and S2 are included)
+    
+    # Create the design matrix without artificial scaling
     cols = [
-        np.ones(len(S1)),  # Constant 1
-        s1, s2,            # Linear terms
-        s1**2, s2**2,      # Quadratic terms
-        s1 * s2,           # Interaction term
-        h_norm             # Intrinsic value
+        np.ones(len(S1)),       # 1
+        S1, S2,                 # S_i
+        S1**2, S2**2,           # S_i^2
+        S1 * S2,                # S1 * S2
+        h                       # h(S1, S2)
     ]
-
-    return np.column_stack(cols), s1_scale, s2_scale
-
+    return np.column_stack(cols)
 # ─────────────────────────────────────────────────────────────────────────────
 #  3. LSM ALGORITHM (Out-of-Sample / "Low Estimator")
 # ─────────────────────────────────────────────────────────────────────────────
-
 def lsm_train_max(train1: np.ndarray, train2: np.ndarray,
                   K: float, r: float, T: float) -> dict:
     """
-    Rückwärts-Induktion zur Schätzung der Regressionskoeffizienten (beta).
-    Kompakte Variante mit 'Rolling Present Value' (V), um Double-Discounting zu vermeiden.
+    Backward induction to estimate the regression coefficients (betas).
+    Uses Longstaff-Schwartz logic over ALL paths (as Glasserman noted for this example).
     """
-    n, m1 = train1.shape
-    m = m1 - 1
+    m = train1.shape[1] - 1
     dt = T / m
     df_step = np.exp(-r * dt)
 
-    def payoff(s1, s2):
-        return np.maximum(np.maximum(s1, s2) - K, 0.0)
+    # V tracks the realized, discounted cash flows
+    V = np.maximum(np.maximum(train1[:, -1], train2[:, -1]) - K, 0.0)
+    betas = {}
 
-    # V speichert den realisierten, rollierenden Barwert der zukünftigen Cashflows
-    V = payoff(train1[:, -1], train2[:, -1])
-
-    betas, scales1, scales2 = {}, {}, {}
-
-    # Rückwärts durch die Zeit (i = m-1, ..., 1)
     for i in range(m - 1, 0, -1):
-        # 1. Zukünftigen Wert auf den aktuellen Zeitpunkt i abdiskontieren
         V *= df_step
         
         S1_i = train1[:, i]
         S2_i = train2[:, i]
-        h_i = payoff(S1_i, S2_i)
+        h_i = np.maximum(np.maximum(S1_i, S2_i) - K, 0.0)
         
-        # Nur in-the-money Pfade betrachten
-        itm = h_i > 0
-
-        if itm.sum() < 10: 
-            continue
-
-        # 2. Regression (V[itm] ist bereits korrekt auf i abdiskontiert!)
-        pv = V[itm]
-        Phi, sc1, sc2 = basis_max(S1_i[itm], S2_i[itm], K)
-        beta, _, _, _ = lstsq(Phi, pv)
-
+        Phi = basis_max(S1_i, S2_i, K)
+        
+        # Regression over all paths
+        beta = lstsq(Phi, V)[0]
         betas[i] = beta
-        scales1[i] = sc1
-        scales2[i] = sc2
 
-        # 3. Fortsetzungswert schätzen
+        # Expected continuation value (capped at 0 per Glasserman p. 464)
         C_hat = np.maximum(Phi @ beta, 0.0)
         
-        # 4. Strikte Ungleichung nach Glasserman (S. 464)
-        exercise = h_i[itm] > C_hat
+        # Exercise decision: intrinsic value must strictly exceed continuation value
+        exercise = h_i > C_hat
         
-        # 5. Bei optimaler Ausübung den abdiskontierten Wert durch den sofortigen Payoff ersetzen
-        idx = np.where(itm)[0]
-        V[idx[exercise]] = h_i[itm][exercise]
+        # Update the value vector for paths where early exercise is optimal
+        V[exercise] = h_i[exercise]
 
-    return dict(betas=betas, scales1=scales1, scales2=scales2, K=K, r=r, T=T, m=m)
-
+    return dict(betas=betas, K=K, r=r, T=T, m=m)
 
 def lsm_price_max(model: dict, price1: np.ndarray, price2: np.ndarray) -> float:
     """
-    Forward pass on a new set of independent paths to calculate the option price.
-    This corresponds to the "Low Estimator" in Glasserman (8.33)-(8.34).
+    Forward pass on independent paths to calculate the true Out-of-Sample price.
+    Corresponds to the 'Low Estimator' from Glasserman.
     """
     betas = model["betas"]
-    sc1_map, sc2_map = model["scales1"], model["scales2"]
-    K_, r_, T_, m = model["K"], model["r"], model["T"], model["m"]
-    df_step = np.exp(-r_ * (T_ / m))
-
-    def payoff(s1, s2):
-        return np.maximum(np.maximum(s1, s2) - K_, 0.0)
+    K, r, T, m = model["K"], model["r"], model["T"], model["m"]
+    df_step = np.exp(-r * (T / m))
 
     n = price1.shape[0]
     exercised = np.zeros(n, dtype=bool)
     payoffs = np.zeros(n)
     ex_times = np.full(n, m, dtype=int)
 
-    # Forward iteration to find the first stopping time where h_i >= C_hat
+    # Forward iteration to find the FIRST optimal stopping time
     for i in range(1, m):
-        if i not in betas: 
-            continue
-            
         active = ~exercised
-        if active.sum() == 0: 
+        if not np.any(active): 
             break
 
         S1_i = price1[active, i]
         S2_i = price2[active, i]
-        h_i = payoff(S1_i, S2_i)
+        h_i = np.maximum(np.maximum(S1_i, S2_i) - K, 0.0)
 
-        # Apply scaling factors computed during the training phase
-        Phi, _, _ = basis_max(S1_i, S2_i, K_, s1_scale=sc1_map[i], s2_scale=sc2_map[i])
-        
+        Phi = basis_max(S1_i, S2_i, K)
         C_hat = np.maximum(Phi @ betas[i], 0.0)
+        
         ex = h_i > C_hat
 
+        # Record the payoff and exercise time for paths that stop here
         idx = np.where(active)[0]
         payoffs[idx[ex]] = h_i[ex]
         ex_times[idx[ex]] = i
         exercised[idx[ex]] = True
 
-    # For paths that were never exercised, use the terminal payoff
+    # Terminal condition for paths that never exercised early
     not_ex = ~exercised
-    payoffs[not_ex] = payoff(price1[not_ex, -1], price2[not_ex, -1])
+    payoffs[not_ex] = np.maximum(np.maximum(price1[not_ex, -1], price2[not_ex, -1]) - K, 0.0)
     ex_times[not_ex] = m
 
-    # Discount all cashflows back to t=0
+    # Discount all cash flows back to t=0
     price = float(np.mean(payoffs * df_step ** ex_times))
     return price
 
