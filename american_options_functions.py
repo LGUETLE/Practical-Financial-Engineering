@@ -1,10 +1,3 @@
-"""
-==============================================================================
-American Max-Option Pricing – Longstaff-Schwartz (LSM)
-Based on Glasserman (2003), Chapter 8.6, Example 8.6.1
-==============================================================================
-"""
-
 import numpy as np
 from scipy.linalg import lstsq
 
@@ -137,38 +130,3 @@ def lsm_price_max(model: dict, price1: np.ndarray, price2: np.ndarray) -> float:
     # Discount all cash flows back to t=0
     price = float(np.mean(payoffs * df_step ** ex_times))
     return price
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  EXECUTION (Parameters from Glasserman Example 8.6.1)
-# ─────────────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    # Parameters matching Glasserman Example 8.6.1
-    S0 = 100.0        # Initial price S1(0) = S2(0)
-    K_val = 100.0     # Strike K
-    T_val = 3.0       # Time to maturity (years)
-    r_val = 0.05      # Risk-free interest rate (5%)
-    delta_val = 0.10  # Dividend yield (10%)
-    sigma_val = 0.20  # Volatility (20%)
-    m_steps = 9       # Number of exercise opportunities
-    n_paths = 4000    # 4000 paths for regression, 4000 for pricing
-
-    print("Starting Low-Estimator Simulation for American Max-Option...")
-
-    # 1. Generate paths for the training phase (Asset 1 and 2)
-    train_S1 = simulate_gbm(S0, sigma_val, r_val, delta_val, T_val, m_steps, n_paths, seed=42)
-    train_S2 = simulate_gbm(S0, sigma_val, r_val, delta_val, T_val, m_steps, n_paths, seed=43)
-
-    # 2. Generate new, independent paths for the pricing phase (Low Estimator)
-    price_S1 = simulate_gbm(S0, sigma_val, r_val, delta_val, T_val, m_steps, n_paths, seed=44)
-    price_S2 = simulate_gbm(S0, sigma_val, r_val, delta_val, T_val, m_steps, n_paths, seed=45)
-
-    # 3. Training: Estimate regression coefficients
-    model_max = lsm_train_max(train_S1, train_S2, K_val, r_val, T_val)
-    
-    # 4. Pricing: Apply out-of-sample forward pass
-    price_max = lsm_price_max(model_max, price_S1, price_S2)
-    
-    print("-" * 60)
-    print(f"Estimated Price (LSM Low Estimator): {price_max:.2f}")
-    print("Glasserman Benchmark (Table 8.1): Exact price is 13.90")
-    print("-" * 60)

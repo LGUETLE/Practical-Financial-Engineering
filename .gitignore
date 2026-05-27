@@ -1,0 +1,31 @@
+# 1. Python Bytecode & Caches (z. B. der besprochene Ordner)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 2. Virtuelle Umgebungen (Packages und Libraries)
+.venv/
+venv/
+env/
+ENV/
+
+# 3. Projekt-spezifische Output-Ordner (werden vom Skript generiert)
+output_tables/
+output_plots/
+
+# 4. Daten & CSV-Dateien (wichtig für Kaggle/Marktdaten)
+*.csv
+*.xlsx
+*.zip
+kaggle_data/
+.kaggle/
+
+# 5. IDEs und Editoren (VS Code, PyCharm, etc.)
+.vscode/
+.idea/
+*.swp
+
+# 6. Betriebssystem-Müll (Mac / Windows)
+.DS_Store
+Thumbs.db
