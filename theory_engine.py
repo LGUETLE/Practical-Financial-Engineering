@@ -149,6 +149,40 @@ def plot_exercise_boundary(model: dict, step_index: int = 4):
     plt.savefig("output_plots/exercise_boundary.pdf", format="pdf", bbox_inches="tight")
     plt.close()
 
+def analyze_volatility_sensitivity(S0: float, K: float, T: float, r: float, 
+                                   delta: float, m_steps: int, n_paths: int):
+    """
+    Evaluates the sensitivity of the Max-Option price to changes in volatility.
+    Tests sigma values: 10%, 20% (Baseline), and 30%.
+    """
+    print("\n--- Running Volatility Sensitivity Analysis ---")
+    
+    # Test different volatility levels
+    sigma_values = [0.10, 0.20, 0.30]
+    results = []
+    
+    for sig in sigma_values:
+        # Generate training paths with the current sigma
+        train_S1 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, seed=500+int(sig*100))
+        train_S2 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, seed=600+int(sig*100))
+        
+        # Generate pricing paths with the current sigma
+        price_S1 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, seed=700+int(sig*100))
+        price_S2 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, seed=800+int(sig*100))
+        
+        # Train and price
+        model = lsm_train_max(train_S1, train_S2, K, r, T)
+        price_lsm = lsm_price_max(model, price_S1, price_S2)
+        
+        results.append({
+            "Volatility (sigma)": f"{sig*100:.0f}%",
+            "LSM_Price": round(price_lsm, 3)
+        })
+        print(f"Computed for sigma={sig:.2f} -> Price: {price_lsm:.3f}")
+        
+    df_results = pd.DataFrame(results)
+    return df_results
+
 # ==============================================================================
 # MAIN EXECUTION & EXPORT
 # ==============================================================================
@@ -170,7 +204,7 @@ if __name__ == "__main__":
     m_steps = 9         # Number of early exercise opportunities
     n_paths = 4000      # Number of paths for both training and pricing
 
-    # 3. Run sensitivity analysis (Moneyness) and export to LaTeX
+    # 3.1 Run sensitivity analysis (Moneyness) and export to LaTeX
     print("\nStarting Moneyness Sensitivity Analysis (Table 1)...")
     df_moneyness = analyze_moneyness_sensitivity(
         T_val, r_val, delta_val, sigma_val, K_val, m_steps, n_paths
@@ -181,6 +215,16 @@ if __name__ == "__main__":
         "output_tables/table_moneyness.tex", 
         index=False, 
         float_format="%.3f"
+    )
+
+    # 3.2 Run Volatility Sensitivity and export
+    print("\nStarting Volatility Sensitivity Analysis (Table 3)...")
+    df_volatility = analyze_volatility_sensitivity(
+        S0_base, K_val, T_val, r_val, delta_val, m_steps, n_paths
+    )
+    df_volatility.to_latex(
+        "output_tables/table_volatility.tex", 
+        index=False
     )
 
     # 4. Run convergence analysis (Path count) and export to LaTeX
