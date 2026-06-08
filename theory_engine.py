@@ -14,6 +14,7 @@ from american_options_functions import (
 # ==============================================================================
 # ANALYSIS & PLOTTING FUNCTIONS
 # ==============================================================================
+
 def analyze_moneyness_sensitivity(T: float, r: float, delta: float, sigma: float, 
                                   K: float, m_steps: int, n_paths: int):
     """
@@ -39,8 +40,8 @@ def analyze_moneyness_sensitivity(T: float, r: float, delta: float, sigma: float
         price_S1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, seed=300+int(S0))
         price_S2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, seed=400+int(S0))
         
-        # Train and price
-        model = lsm_train_max(train_S1, train_S2, K, r, T)
+        # Train and price (Explicitly using TVR method)
+        model = lsm_train_max(train_S1, train_S2, K, r, T, method="TVR")
         price_lsm = lsm_price_max(model, price_S1, price_S2)
         
         exact = exact_prices[S0]
@@ -75,8 +76,8 @@ def analyze_convergence(S0: float, K: float, T: float, r: float, delta: float, s
         p1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n, seed=44)
         p2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n, seed=45)
         
-        # Algorithm
-        model = lsm_train_max(t1, t2, K, r, T)
+        # Algorithm (Explicitly using TVR method)
+        model = lsm_train_max(t1, t2, K, r, T, method="TVR")
         price = lsm_price_max(model, p1, p2)
         
         elapsed_time = time.time() - start_time
@@ -170,8 +171,8 @@ def analyze_volatility_sensitivity(S0: float, K: float, T: float, r: float,
         price_S1 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, seed=700+int(sig*100))
         price_S2 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, seed=800+int(sig*100))
         
-        # Train and price
-        model = lsm_train_max(train_S1, train_S2, K, r, T)
+        # Train and price (Explicitly using TVR method)
+        model = lsm_train_max(train_S1, train_S2, K, r, T, method="TVR")
         price_lsm = lsm_price_max(model, price_S1, price_S2)
         
         results.append({
@@ -183,12 +184,50 @@ def analyze_volatility_sensitivity(S0: float, K: float, T: float, r: float,
     df_results = pd.DataFrame(results)
     return df_results
 
+def compare_lsm_tvr_theory(S0: float, K: float, T: float, r: float, delta: float, sigma: float, 
+                           m_steps: int, n_paths: int, num_runs: int = 10):
+    """
+    Empirically compares the variance of Classic LSM and TVR 
+    under theoretical laboratory conditions across multiple independent runs.
+    """
+    print(f"\n--- Running Theory Comparison: Classic LSM vs TVR ({num_runs} Runs) ---")
+    
+    lsm_prices = []
+    tvr_prices = []
+    
+    for i in range(num_runs):
+        # Generate new independent paths for each run
+        t1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths)
+        t2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths)
+        p1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths)
+        p2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths)
+        
+        # Evaluate Classic LSM
+        model_lsm = lsm_train_max(t1, t2, K, r, T, method="LSM")
+        lsm_prices.append(lsm_price_max(model_lsm, p1, p2))
+        
+        # Evaluate TVR Value Iteration
+        model_tvr = lsm_train_max(t1, t2, K, r, T, method="TVR")
+        tvr_prices.append(lsm_price_max(model_tvr, p1, p2))
+        
+    df_compare = pd.DataFrame({
+        "Run": range(1, num_runs + 1),
+        "Classic_LSM": lsm_prices,
+        "TVR_Value_Iteration": tvr_prices
+    })
+    
+    print(df_compare.to_string(index=False))
+    print(f"\nVariance LSM: {np.var(lsm_prices, ddof=1):.4f}")
+    print(f"Variance TVR: {np.var(tvr_prices, ddof=1):.4f}")
+    
+    df_compare.to_latex("output_tables/table_theory_comparison.tex", index=False, float_format="%.3f")
+    return df_compare
+
 # ==============================================================================
 # MAIN EXECUTION & EXPORT
 # ==============================================================================
 if __name__ == "__main__":
-    import os
-
+    
     # 1. Setup export directories for LaTeX and PDF files
     print("Setting up export directories...")
     os.makedirs("output_tables", exist_ok=True)
@@ -203,6 +242,11 @@ if __name__ == "__main__":
     sigma_val = 0.20    # Volatility (20%)
     m_steps = 9         # Number of early exercise opportunities
     n_paths = 4000      # Number of paths for both training and pricing
+
+    # 3.0 Run theoretical comparison of Classic LSM vs TVR
+    compare_lsm_tvr_theory(
+        S0_base, K_val, T_val, r_val, delta_val, sigma_val, m_steps, n_paths, num_runs=10
+    )
 
     # 3.1 Run sensitivity analysis (Moneyness) and export to LaTeX
     print("\nStarting Moneyness Sensitivity Analysis (Table 1)...")
@@ -248,10 +292,10 @@ if __name__ == "__main__":
     t1_plot = simulate_gbm(S0_base, sigma_val, r_val, delta_val, T_val, m_steps, 20000, seed=1)
     t2_plot = simulate_gbm(S0_base, sigma_val, r_val, delta_val, T_val, m_steps, 20000, seed=2)
     
-    # Train the model specifically for the plot
-    plot_model = lsm_train_max(t1_plot, t2_plot, K_val, r_val, T_val)
+    # Train the model specifically for the plot (Explicitly using TVR method)
+    plot_model = lsm_train_max(t1_plot, t2_plot, K_val, r_val, T_val, method="TVR")
     
-    # Call the plotting function (Make sure plt.savefig() is used inside this function instead of plt.show())
+    # Call the plotting function 
     plot_exercise_boundary(plot_model, step_index=4)
     print("Plot successfully saved to '/output_plots'.")
     
