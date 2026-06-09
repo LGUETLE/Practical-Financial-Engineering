@@ -2,13 +2,13 @@ import os
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
+import matplotlib.pyplot as plt  # <-- NEW: Added for empirical plotting
 
 from american_options_functions import (
     simulate_correlated_gbm, 
     lsm_train_max, 
     lsm_price_max
 )
-# --- NEW: Import the Data Fetcher ---
 from data_fetcher import HistoricalDataFetcher
 
 # ==============================================================================
@@ -19,34 +19,33 @@ def run_empirical_macro_replications(S0_1: float, S0_2: float,
                                      mu_1: float, mu_2: float, 
                                      sigma_1: float, sigma_2: float, rho: float, 
                                      K: float, r: float, T: float, m_steps: int, 
-                                     n_paths: int = 10000, R_runs: int = 50):
+                                     n_paths: int = 10000, R_runs: int = 50,
+                                     scenario_name: str = "tech"):  # <-- NEW: Added scenario name
     """
     Executes macro-replications on correlated, historical market data and 
     calculates 95% confidence intervals to compare Classic LSM and TVR.
+    Also generates a comparison boxplot for visual variance analysis.
     """
-    print(f"\n--- Running {R_runs} Macro-Replications (Real Market Data) ---")
+    print(f"\n--- Running {R_runs} Macro-Replications ({scenario_name.upper()} Data) ---")
     
     results_lsm = []
     results_tvr = []
     
-    # IMPORTANT: For option pricing under the risk-neutral measure (Q), we must use 
-    # the risk-free rate (r) as the drift parameter, NOT the historical mu! 
-    # The historical mu is only used if we simulate real-world (P) scenarios.
+    # Risk-neutral measure dynamics (r is used as the drift for pricing)
     drift_1_rn = r
     drift_2_rn = r
 
     for run in range(R_runs):
-        # Simulate correlated training and pricing paths for the current run
         t1, t2 = simulate_correlated_gbm(S0_1, S0_2, drift_1_rn, drift_2_rn, 
                                          sigma_1, sigma_2, rho, T, m_steps, n_paths)
         p1, p2 = simulate_correlated_gbm(S0_1, S0_2, drift_1_rn, drift_2_rn, 
                                          sigma_1, sigma_2, rho, T, m_steps, n_paths)
         
-        # Pricing via Classic LSM (Tracking cashflows & ITM filter)
+        # Classic LSM
         model_lsm = lsm_train_max(t1, t2, K, r, T, method="LSM")
         results_lsm.append(lsm_price_max(model_lsm, p1, p2))
         
-        # Pricing via TVR Value Iteration (Smoothed target variable)
+        # TVR Value Iteration
         model_tvr = lsm_train_max(t1, t2, K, r, T, method="TVR")
         results_tvr.append(lsm_price_max(model_tvr, p1, p2))
         
@@ -58,16 +57,15 @@ def run_empirical_macro_replications(S0_1: float, S0_2: float,
         prices = np.array(prices)
         mean_val = np.mean(prices)
         var_val = np.var(prices, ddof=1)
-        se = stats.sem(prices) # Standard Error of the Mean
-        
-        # Calculate 95% Confidence Interval using the t-distribution
-        ci_low, ci_high = stats.t.interval(0.95, len(prices)-1, loc=mean_val, scale=se)
+        se = stats.sem(prices)
+        ci_low, _ = stats.t.interval(0.95, len(prices)-1, loc=mean_val, scale=se)
+        # Re-calculating high bound explicitly to avoid unpacking issues if needed
+        _, ci_high = stats.t.interval(0.95, len(prices)-1, loc=mean_val, scale=se)
         return mean_val, var_val, ci_low, ci_high
 
     lsm_mean, lsm_var, lsm_low, lsm_high = compute_ci(results_lsm)
     tvr_mean, tvr_var, tvr_low, tvr_high = compute_ci(results_tvr)
     
-    # Compile results into a DataFrame
     df_stats = pd.DataFrame({
         "Method": ["Classic LSM", "TVR Value Iteration"],
         "Mean_Price": [lsm_mean, tvr_mean],
@@ -76,57 +74,87 @@ def run_empirical_macro_replications(S0_1: float, S0_2: float,
         "CI_95_Upper": [lsm_high, tvr_high]
     })
     
-    print("\nStatistical Results (Calibrated to Real Data):")
+    print(f"\nStatistical Results ({scenario_name.upper()}):")
     print(df_stats.to_string(index=False))
     
-    # Export to LaTeX for the final project documentation
+    # --- NEW: Generate and Export Boxplot ---
+    os.makedirs("output_plots", exist_ok=True)
+    plt.figure(figsize=(6, 4.5))
+    
+    # Plotting both datasets side by side
+    plt.boxplot([results_lsm, results_tvr], labels=['Classic LSM', 'TVR Value Iteration'])
+    plt.title(f"Empirical Price Distribution: {scenario_name.upper()} Scenario")
+    plt.ylabel("Calculated Option Price ($V_0$)")
+    plt.grid(axis='y', linestyle='--', alpha=0.5)
+    
+    plt.tight_layout()
+    plt.savefig(f"output_plots/boxplot_variance_{scenario_name}.pdf", format="pdf", bbox_inches="tight")
+    plt.close()
+    print(f"Boxplot saved to 'output_plots/boxplot_variance_{scenario_name}.pdf'")
+    
+    # --- Export to unique LaTeX table file ---
     os.makedirs("output_tables", exist_ok=True)
-    df_stats.to_latex("output_tables/table_empirical_macro.tex", index=False, float_format="%.4f")
+    df_stats.to_latex(f"output_tables/table_empirical_{scenario_name}.tex", index=False, float_format="%.4f")
+    print(f"LaTeX table saved to 'output_tables/table_empirical_{scenario_name}.tex'")
     
     return df_stats
 
 # ==============================================================================
-# MAIN EXECUTION (Updated to use Data Fetcher)
+# MAIN EXECUTION
 # ==============================================================================
 if __name__ == "__main__":
     
-    # 1. Initialize the fetcher and get real market data
-    # We use Apple (AAPL) and Microsoft (MSFT) as highly correlated tech stocks.
-    # You can change these tickers or dates at any time!
-    fetcher = HistoricalDataFetcher(
-        ticker_1="AAPL", 
-        ticker_2="MSFT", 
-        start_date="2021-01-01" # Fetching roughly 5 years of history
+    # Contract specifications
+    K_strike = 100.0    
+    r_riskfree = 0.05   
+    T_mat = 1.0         
+    m_exercise = 12     
+    n_paths = 10000     
+    R_runs = 50         
+    S0_norm = 100.0 
+    
+    # ---------------------------------------------------------
+    # SCENARIO 1: TRADITIONAL TECH STOCKS
+    # ---------------------------------------------------------
+    print("\n" + "="*60)
+    print("STARTING SCENARIO 1: TECH STOCKS (AAPL vs MSFT)")
+    print("="*60)
+    
+    tech_fetcher = HistoricalDataFetcher(
+        ticker_1="AAPL", ticker_2="MSFT", start_date="2022-01-01", asset_class="stock"
+    )
+    tech_df = tech_fetcher.fetch_data()
+    tech_params = tech_fetcher.calculate_historical_parameters(tech_df)
+    
+    run_empirical_macro_replications(
+        S0_1=S0_norm, S0_2=S0_norm, 
+        mu_1=tech_params["mu_1"], mu_2=tech_params["mu_2"], 
+        sigma_1=tech_params["sigma_1"], sigma_2=tech_params["sigma_2"], 
+        rho=tech_params["rho"], 
+        K=K_strike, r=r_riskfree, T=T_mat, m_steps=m_exercise,  # <-- Fixed: T=T_mat
+        n_paths=n_paths, R_runs=R_runs, 
+        scenario_name="tech" 
     )
     
-    price_df = fetcher.fetch_data()
-    market_params = fetcher.calculate_historical_parameters(price_df)
+    # ---------------------------------------------------------
+    # SCENARIO 2: CRYPTOCURRENCY
+    # ---------------------------------------------------------
+    print("\n" + "="*60)
+    print("STARTING SCENARIO 2: CRYPTOCURRENCY (BTC vs ETH)")
+    print("="*60)
     
-    # 2. Define the Option Contract Specifications
-    # We set the strike price (K) to roughly match the current asset prices 
-    # to ensure the option is traded around the At-The-Money (ATM) level.
+    crypto_fetcher = HistoricalDataFetcher(
+        ticker_1="BTC", ticker_2="ETH", start_date="2022-01-01", asset_class="crypto"
+    )
+    crypto_df = crypto_fetcher.fetch_data()
+    crypto_params = crypto_fetcher.calculate_historical_parameters(crypto_df)
     
-    K_strike = 150.0 
-    r_riskfree = 0.05
-    T_mat = 1.0         # 1 year maturity
-    m_exercise = 12     # 12 early exercise opportunities (e.g., monthly)
-    
-    n_paths = 10000     # Paths per simulation
-    R_runs = 50         # Number of macro-replications
-    
-    # 3. Execute the statistical engine using the dynamically fetched parameters
     run_empirical_macro_replications(
-        S0_1=market_params["S0_1"], 
-        S0_2=market_params["S0_2"], 
-        mu_1=market_params["mu_1"], 
-        mu_2=market_params["mu_2"], 
-        sigma_1=market_params["sigma_1"], 
-        sigma_2=market_params["sigma_2"], 
-        rho=market_params["rho"], 
-        K=K_strike, 
-        r=r_riskfree, 
-        T=T_mat, 
-        m_steps=m_exercise, 
-        n_paths=n_paths, 
-        R_runs=R_runs
+        S0_1=S0_norm, S0_2=S0_norm, 
+        mu_1=crypto_params["mu_1"], mu_2=crypto_params["mu_2"], 
+        sigma_1=crypto_params["sigma_1"], sigma_2=crypto_params["sigma_2"], 
+        rho=crypto_params["rho"], 
+        K=K_strike, r=r_riskfree, T=T_mat, m_steps=m_exercise,  # <-- Fixed: T=T_mat
+        n_paths=n_paths, R_runs=R_runs, 
+        scenario_name="crypto" 
     )

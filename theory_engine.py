@@ -3,6 +3,7 @@ import time
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import scipy.stats as stats  # <-- NEW: Required for Confidence Intervals
 
 from american_options_functions import (
     simulate_gbm, 
@@ -185,10 +186,11 @@ def analyze_volatility_sensitivity(S0: float, K: float, T: float, r: float,
     return df_results
 
 def compare_lsm_tvr_theory(S0: float, K: float, T: float, r: float, delta: float, sigma: float, 
-                           m_steps: int, n_paths: int, num_runs: int = 10):
+                           m_steps: int, n_paths: int, num_runs: int = 50):
     """
     Empirically compares the variance of Classic LSM and TVR 
     under theoretical laboratory conditions across multiple independent runs.
+    Now includes 95% Confidence Intervals!
     """
     print(f"\n--- Running Theory Comparison: Classic LSM vs TVR ({num_runs} Runs) ---")
     
@@ -210,18 +212,49 @@ def compare_lsm_tvr_theory(S0: float, K: float, T: float, r: float, delta: float
         model_tvr = lsm_train_max(t1, t2, K, r, T, method="TVR")
         tvr_prices.append(lsm_price_max(model_tvr, p1, p2))
         
-    df_compare = pd.DataFrame({
+        # Print progress to keep track during longer runs
+        if (i + 1) % 10 == 0:
+            print(f"Completed {i + 1}/{num_runs} independent runs...")
+            
+    # --- Print Run-by-Run Table (Optional visual check) ---
+    df_runs = pd.DataFrame({
         "Run": range(1, num_runs + 1),
         "Classic_LSM": lsm_prices,
         "TVR_Value_Iteration": tvr_prices
     })
+    # Uncomment the next line if you want to see all 50 runs in the console
+    # print(df_runs.to_string(index=False))
+
+    # --- Statistical Evaluation (Confidence Intervals) ---
+    def compute_stats(prices):
+        prices = np.array(prices)
+        mean_val = np.mean(prices)
+        var_val = np.var(prices, ddof=1)
+        se = stats.sem(prices) # Standard Error of the Mean
+        
+        # Calculate 95% Confidence Interval using the t-distribution
+        ci_low, ci_high = stats.t.interval(0.95, len(prices)-1, loc=mean_val, scale=se)
+        return mean_val, var_val, ci_low, ci_high
+
+    lsm_mean, lsm_var, lsm_low, lsm_high = compute_stats(lsm_prices)
+    tvr_mean, tvr_var, tvr_low, tvr_high = compute_stats(tvr_prices)
     
-    print(df_compare.to_string(index=False))
-    print(f"\nVariance LSM: {np.var(lsm_prices, ddof=1):.4f}")
-    print(f"Variance TVR: {np.var(tvr_prices, ddof=1):.4f}")
+    # Compile summary results into a DataFrame for export
+    df_summary = pd.DataFrame({
+        "Method": ["Classic LSM", "TVR Value Iteration"],
+        "Mean_Price": [lsm_mean, tvr_mean],
+        "Variance": [lsm_var, tvr_var],
+        "CI_95_Lower": [lsm_low, tvr_low],
+        "CI_95_Upper": [lsm_high, tvr_high]
+    })
     
-    df_compare.to_latex("output_tables/table_theory_comparison.tex", index=False, float_format="%.3f")
-    return df_compare
+    print("\nTheoretical Statistics (Glasserman Benchmark):")
+    print(df_summary.to_string(index=False))
+    
+    # Export only the summary table to LaTeX
+    df_summary.to_latex("output_tables/table_theory_comparison.tex", index=False, float_format="%.4f")
+    
+    return df_summary
 
 # ==============================================================================
 # MAIN EXECUTION & EXPORT
@@ -243,9 +276,9 @@ if __name__ == "__main__":
     m_steps = 9         # Number of early exercise opportunities
     n_paths = 4000      # Number of paths for both training and pricing
 
-    # 3.0 Run theoretical comparison of Classic LSM vs TVR
+    # 3.0 Run theoretical comparison of Classic LSM vs TVR (Increased to 50 runs for statistical significance!)
     compare_lsm_tvr_theory(
-        S0_base, K_val, T_val, r_val, delta_val, sigma_val, m_steps, n_paths, num_runs=10
+        S0_base, K_val, T_val, r_val, delta_val, sigma_val, m_steps, n_paths, num_runs=50
     )
 
     # 3.1 Run sensitivity analysis (Moneyness) and export to LaTeX
