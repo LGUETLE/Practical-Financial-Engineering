@@ -23,6 +23,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 def main() -> None:
     os.chdir(ROOT)
     import bounds_engine
+    import seed_study
     import empirical_engine
     import stresstest_engine
     import theory_engine
@@ -30,7 +31,8 @@ def main() -> None:
     steps = [("theory_engine.py", theory_engine.main),
              ("bounds_engine.py", bounds_engine.main),
              ("empirical_engine.py", empirical_engine.main),
-             ("stresstest_engine.py", stresstest_engine.main)]
+             ("stresstest_engine.py", stresstest_engine.main),
+             ("seed_study.py", seed_study.main)]
     runtimes = []
     t_all = time.perf_counter()
     for name, fn in steps:
