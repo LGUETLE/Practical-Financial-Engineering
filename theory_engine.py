@@ -43,16 +43,18 @@ def analyze_moneyness_sensitivity(T: float, r: float, delta: float, sigma: float
         
         # Train and price (Explicitly using TVR method)
         model = lsm_train_max(train_S1, train_S2, K, r, T, method="TVR")
-        price_lsm = lsm_price_max(model, price_S1, price_S2)
-        
+        price_lsm, se_lsm = lsm_price_max(model, price_S1, price_S2, return_se=True)
+
         exact = exact_prices[S0]
-        abs_error = abs(price_lsm - exact)
-        
+        diff = price_lsm - exact
+
         results.append({
             "S0": S0,
             "LSM_Price": round(price_lsm, 3),
+            "Std_Error": round(se_lsm, 3),
             "Exact_Price": exact,
-            "Abs_Error": round(abs_error, 3)
+            "Difference": round(diff, 3),
+            "Diff_over_SE": round(diff / se_lsm, 2)
         })
         
     df_results = pd.DataFrame(results)
@@ -149,6 +151,7 @@ def plot_exercise_boundary(model: dict, step_index: int = 4):
     plt.tight_layout()
     # Save the figure as a high-quality vector graphic for LaTeX
     plt.savefig("output_plots/exercise_boundary.pdf", format="pdf", bbox_inches="tight")
+    plt.savefig("output_plots/exercise_boundary.png", format="png", dpi=150, bbox_inches="tight")
     plt.close()
 
 def analyze_volatility_sensitivity(S0: float, K: float, T: float, r: float, 
@@ -255,10 +258,27 @@ def compare_lsm_tvr_theory(S0: float, K: float, T: float, r: float, delta: float
     
     print("\nTheoretical Statistics (Glasserman Benchmark):")
     print(df_summary.to_string(index=False))
-    
+
+    # --- Test for equal variances ---
+    # Two-sided F-test. It assumes independent samples; here LSM and TVR are
+    # priced on the same paths in each run, so the Pitman-Morgan test for
+    # paired samples (correlation of X+Y with X-Y) is reported as well.
+    x, y = np.array(lsm_prices), np.array(tvr_prices)
+    f_stat = lsm_var / tvr_var
+    df1 = df2 = num_runs - 1
+    f_p = 2 * min(stats.f.cdf(f_stat, df1, df2), stats.f.sf(f_stat, df1, df2))
+    pm_r, pm_p = stats.pearsonr(x + y, x - y)
+    pair_corr = np.corrcoef(x, y)[0, 1]
+    print(f"\nF-test (H0: equal variances): F = {f_stat:.4f}, "
+          f"df = ({df1}, {df2}), two-sided p = {f_p:.4f}")
+    print(f"Correlation of LSM and TVR prices across runs: {pair_corr:.4f}")
+    print(f"Pitman-Morgan test (paired): r = {pm_r:.4f}, p = {pm_p:.4f}")
+
     # Export only the summary table to LaTeX
     df_summary.to_latex("output_tables/table_theory_comparison.tex", index=False, float_format="%.4f")
-    
+    df_runs.to_csv("output_tables/theory_comparison_runs.csv", index=False)
+    df_summary.to_csv("output_tables/theory_comparison_summary.csv", index=False)
+
     return df_summary
 
 # ==============================================================================
@@ -298,6 +318,7 @@ if __name__ == "__main__":
         index=False, 
         float_format="%.3f"
     )
+    df_moneyness.to_csv("output_tables/table_moneyness.csv", index=False)
 
     # 3.2 Run Volatility Sensitivity and export
     print("\nStarting Volatility Sensitivity Analysis (Table 3)...")
