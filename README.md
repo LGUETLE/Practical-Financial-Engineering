@@ -30,16 +30,25 @@ the policy trained on 100,000 paths, against 0.07–0.19 for the one trained on 
 
 ## Key findings
 
-- **ITM sample effect.** On the benchmark, TVR beats LSM slightly (+0.023, SE 0.005). The reason
-  is LSM's restriction of the regression to in-the-money paths: fitting on all paths adds +0.023
-  (Holm p = 1e-9). The regression target (realized cash flow vs value iteration) adds nothing
-  (−0.0003, SE 0.004).
+Classic LSM and TVR differ in two factors: the regression target (realized cash flow vs value
+iteration) and the regression sample (in-the-money paths vs all paths). A 2x2 design separates
+them, and which factor matters depends on the regime.
+
+- **Benchmark: the ITM filter drives the difference.**
+  - TVR beats classic LSM by +0.018 (SE 0.0011; seed study, 4,000 replications), about 0.13% of
+    the price: statistically clear, economically small.
+  - In the 2x2 decomposition (R = 200, Holm-corrected), fitting on all paths instead of
+    in-the-money paths only adds +0.023 (SE 0.0034, p = 1e-9). The target adds −0.0003
+    (SE 0.0041, p = 0.94).
+- **High volatility without dividends: the target matters.** Here the European Stulz price is
+  exact.
+  - At σ = 1.2 the bias is −2.14 for classic LSM and −0.70 for TVR (difference +1.44, SE 0.31).
+  - Of this difference, value iteration contributes +1.15 (SE 0.30, Holm p = 0.018) and the
+    all-paths sample +0.29 (SE 0.12, Holm p = 0.25, not significant). R = 20 replications;
+    Holm over 21 tests.
 - **No variance difference.** LSM and TVR estimates have statistically indistinguishable variances,
   both on the benchmark (Pitman–Morgan p = 0.47) and in a stress test with σ = 0.8 and as few as
   250 paths (all Holm p ≥ 0.91).
-- **High volatility vs Stulz.** Without dividends the European Stulz price is exact. Against it,
-  at σ = 1.2, value iteration cuts the bias from −2.14 (classic LSM) to −0.70 (TVR); the paired
-  difference is +1.44 (SE 0.31, Holm p = 0.003).
 
 ## Estimated exercise region
 

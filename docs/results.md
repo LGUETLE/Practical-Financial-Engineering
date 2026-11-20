@@ -7,10 +7,15 @@ All results of the project with their full context. Methods are described in [me
 - **Price intervals.** The default policy gives 95% intervals of [7.94, 8.12], [13.78, 14.06]
   and [21.14, 21.49] for S0 = 90 / 100 / 110. All three contain the Glasserman reference values
   8.08 / 13.90 / 21.34. A policy trained on 100,000 paths narrows the duality gap to 0.04–0.12.
-- **LSM vs TVR.** On the benchmark the difference is small (about 0.02 on 13.8). It comes from the
-  **regression sample** (all paths vs ITM paths), not from the regression target. With δ = 0 and
-  high volatility the **target** matters instead: at σ = 1.0–1.2, value iteration cuts the bias
-  against the exact price by more than half.
+- **LSM vs TVR: which factor matters depends on the regime.** Classic LSM and TVR differ in both
+  the regression target and the regression sample.
+  - On the benchmark, TVR − LSM = +0.018 (SE 0.0011, seed study with 4,000 replications), about
+    0.13% of the price: statistically clear, economically small. The 2x2 decomposition attributes
+    it to the **regression sample**: all paths vs ITM paths +0.023 (SE 0.0034, R = 200). The target
+    contributes −0.0003 (SE 0.0041).
+  - With δ = 0 and high volatility the **target** matters instead. At σ = 1.2, TVR − LSM = +1.44
+    (SE 0.31), of which value iteration contributes +1.15 (SE 0.30, Holm p = 0.018) and the sample
+    +0.29 (SE 0.12, Holm p = 0.25).
 - **No variance advantage for either method.** The variances of LSM and TVR are statistically
   indistinguishable, also at low path counts and σ = 0.8. The difference at high volatility is in
   the bias (policy quality), not the variance.
@@ -79,7 +84,9 @@ On this benchmark **the regression sample, not the target, drives the LSM/TVR di
 - Fitting on all paths instead of ITM paths only gives a better policy (+0.023).
 - Value-iteration targets instead of realized cash flows make no detectable difference.
 - TVR − LSM is the sum of the two main effects, so it is almost entirely the sample effect.
-- The effect is small: about 0.15% of the price.
+- The effect is small. The most precise estimate of TVR − LSM, from the seed study below (4,000
+  replications), is +0.0182 (SE 0.0011), about 0.13% of the price: statistically clear,
+  economically small.
 
 ### Classic LSM vs TVR: variances
 
@@ -197,10 +204,23 @@ Bias = mean − Stulz, with the SE over replications in brackets:
 shows the bias growing with σ and the methods separating at high σ:
 - At σ = 1.2 the bias is −2.14 for classic LSM and −0.70 for TVR (paired difference +1.44,
   SE 0.31, Holm p = 0.003).
+- Classic LSM and TVR differ in both factors, so this difference is not due to value iteration
+  alone. The 2x2 decomposition at σ = 1.2 (R = 20, paired over replications, Holm correction over
+  all 21 contrasts of the sweep) splits it into:
+
+  | Contrast at σ = 1.2 | Estimate | SE | Holm p |
+  |---|---:|---:|---:|
+  | TVR − classic LSM | +1.4394 | 0.3066 | 0.0033 |
+  | Target (value − cash flow) | +1.1506 | 0.2993 | 0.0175 |
+  | Sample (all − ITM) | +0.2888 | 0.1160 | 0.2473 |
+
 - Unlike on the Glasserman benchmark, here the **regression target** matters. Value iteration
   instead of realized cash flows improves the price by 0.09 at σ = 0.6 (Holm p = 0.005) and by 1.15
   at σ = 1.2 (Holm p = 0.018).
-- The sample effect is not significant at any σ after the correction.
+- The sample effect is not significant at any σ after the correction. **Regime dependence:** on
+  the benchmark (δ = 0.10, σ = 0.2) the ITM filter drives the LSM/TVR difference and the target
+  does not matter. At high volatility without dividends the target matters, and the sample effect
+  is not significant.
 - A plausible explanation: with very noisy payoffs, the realized cash-flow targets give noisy fits
   in the money and hence more spurious early exercise. Note that the significant target effect
   appears only at σ ≥ 0.6. At the calibrated volatilities the methods differ by less than their
