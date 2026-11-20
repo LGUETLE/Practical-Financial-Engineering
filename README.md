@@ -36,6 +36,9 @@ code. Since then I have revised and extended it individually:
   variate in the forward pass.
 - Upper bound by duality (Andersen–Broadie 2004) with nested simulation, giving a price interval
   for every learned policy (`duality.py`, `bounds_engine.py`).
+- Empirical part: Yahoo Finance for stocks and crypto (Binance removed), one fixed window
+  2022-01-01 to 2025-12-31; only σ and ρ are calibrated (the unused drift estimate is removed);
+  with δ = 0 the exact European (Stulz) price serves as reference for the bias of all four methods.
 
 ## Model and methods
 
@@ -185,6 +188,36 @@ than L: at S0 = 110 classic LSM and TVR have indistinguishable lower bounds (dif
 SE 0.0118), but the LSM gap is larger by 0.025 (SE 0.008, Holm p = 0.002). Runtime about 70 s
 for all 12 bound pairs.
 
+### Calibrated scenarios: bias against an exact reference
+
+σ and ρ are estimated from daily log-returns (Yahoo Finance, 2022-01-01 to 2025-12-31; 252
+periods per year for stocks, 365 for crypto). Historical returns are observed under P; their drift
+is not used, pricing uses the risk-neutral drift r. Contract: S0 = 100 (both assets, normalised),
+K = 100, T = 1, r = 0.05, 12 exercise dates, **δ = 0**. Without dividends, e^{−rt} max(S_1, S_2)
+is a submartingale under Q, so early exercise is never optimal and the Bermudan price equals the
+European price. The Stulz formula is therefore an exact reference, and any early exercise by a
+learned policy is an error. Full tables: [`results/empirical.md`](results/empirical.md).
+
+| Scenario | σ_1 / σ_2 / ρ | Stulz | Classic LSM | Cash flow, all | Value, ITM | TVR |
+|---|---|---:|---:|---:|---:|---:|
+| AAPL / MSFT | 0.284 / 0.267 / 0.627 | 19.2203 | −0.052 (0.040) | −0.036 (0.039) | −0.039 (0.040) | −0.032 (0.039) |
+| BTC / ETH | 0.515 / 0.698 / 0.838 | 35.3960 | −0.310 (0.106) | −0.235 (0.106) | −0.192 (0.106) | −0.162 (0.106) |
+
+Bias = mean − Stulz (SE over R = 50 replications, N = 10,000 paths). All means lie below the exact
+price. Only classic LSM in the crypto scenario is significantly biased after a Holm correction
+over the eight tests (p = 0.04). The learned policies stop 6–10% of the pricing paths early,
+although stopping early is never optimal here. Most of these paths are deep in the money, where
+the loss from stopping early is small.
+
+The volatility sweep (σ_1 = σ_2 = σ, ρ = 0.5, R = 20 per σ) shows the bias growing with σ, and the
+methods separating at high σ: at σ = 1.2 the bias is −2.14 for classic LSM and −0.70 for TVR
+(paired difference +1.44, SE 0.31, Holm p = 0.003). Here, unlike on the Glasserman benchmark, the
+**regression target** matters: value iteration instead of realized cash flows improves the price
+by 0.09 at σ = 0.6 and 1.15 at σ = 1.2 (Holm p = 0.005 and 0.018). The sample effect is not
+significant at any σ after the correction.
+
+![Bias against the Stulz price vs volatility](results/empirical_sigma_sensitivity.png)
+
 ### Estimated exercise region
 
 Estimated exercise region at exercise date i = 4 (t = 4/3), from a TVR model trained on 20,000
@@ -195,9 +228,7 @@ other, and continues near the diagonal S_1 = S_2.
 
 ## Work in progress
 
-The empirical calibration (`empirical_engine.py`, `data_fetcher.py`: volatilities and correlation
-estimated from AAPL/MSFT and BTC/ETH prices) and the stress test (`stresstest_engine.py`) are being
-revised and are not reported here yet. Planned next: the European max-call closed form (Stulz 1982)
+The stress test (`stresstest_engine.py`) is being revised and is not reported here yet. Planned next: the European max-call closed form (Stulz 1982)
 as benchmark and control variate, a duality-based upper bound (Andersen–Broadie 2004), and `pytest`
 tests.
 

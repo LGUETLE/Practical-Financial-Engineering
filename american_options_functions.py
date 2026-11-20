@@ -26,35 +26,30 @@ def simulate_gbm(S0: float, sigma: float, r: float, delta: float,
     
     return np.hstack([np.full((n_paths, 1), S0), np.exp(log_S)])
 
-def simulate_correlated_gbm(S0_1: float, S0_2: float, mu_1: float, mu_2: float, 
-                            sigma_1: float, sigma_2: float, rho: float,
-                            T: float, m: int, n_paths: int,
+def simulate_correlated_gbm(S0_1: float, S0_2: float, sigma_1: float, sigma_2: float,
+                            rho: float, r: float, delta: float, T: float, m: int,
+                            n_paths: int,
                             rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
     """
-    Simulates two correlated GBMs using Cholesky decomposition.
-    Used for historical market data.
+    Simulates two correlated GBMs under the risk-neutral measure,
+    dS_j = (r - delta) S_j dt + sigma_j S_j dW_j with d<W_1, W_2> = rho dt,
+    exactly on the grid t_i = i T / m (correlation via Cholesky factor of [[1, rho], [rho, 1]]).
+    Used for the calibrated (empirical) scenarios: only sigma_1, sigma_2 and rho are calibrated
+    from data; the drift is always the risk-neutral r - delta, never a historical estimate.
 
     All randomness comes from the explicitly passed generator `rng`.
+    Returns two arrays of shape (n_paths, m + 1) whose first columns are S0_1 and S0_2.
     """
     dt = T / m
-    # Covariance matrix for Cholesky decomposition
-    cov_matrix = np.array([[1.0, rho], 
-                           [rho, 1.0]])
-    L = cholesky(cov_matrix, lower=True)
-
-    # Generate independent shocks and apply correlation
-    Z_uncorr = rng.standard_normal((2, n_paths, m))
-    
-    paths_1 = np.zeros((n_paths, m + 1))
-    paths_2 = np.zeros((n_paths, m + 1))
-    paths_1[:, 0] = S0_1
-    paths_2[:, 0] = S0_2
-
-    for t in range(1, m + 1):
-        Z_corr = L @ Z_uncorr[:, :, t-1] 
-        paths_1[:, t] = paths_1[:, t-1] * np.exp((mu_1 - 0.5 * sigma_1**2) * dt + sigma_1 * np.sqrt(dt) * Z_corr[0, :])
-        paths_2[:, t] = paths_2[:, t-1] * np.exp((mu_2 - 0.5 * sigma_2**2) * dt + sigma_2 * np.sqrt(dt) * Z_corr[1, :])
-        
+    L = cholesky(np.array([[1.0, rho], [rho, 1.0]]), lower=True)
+    Z = rng.standard_normal((2, n_paths, m))
+    Z1 = L[0, 0] * Z[0]
+    Z2 = L[1, 0] * Z[0] + L[1, 1] * Z[1]
+    sq = np.sqrt(dt)
+    log1 = np.cumsum((r - delta - 0.5 * sigma_1**2) * dt + sigma_1 * sq * Z1, axis=1)
+    log2 = np.cumsum((r - delta - 0.5 * sigma_2**2) * dt + sigma_2 * sq * Z2, axis=1)
+    paths_1 = np.hstack([np.full((n_paths, 1), S0_1), S0_1 * np.exp(log1)])
+    paths_2 = np.hstack([np.full((n_paths, 1), S0_2), S0_2 * np.exp(log2)])
     return paths_1, paths_2
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1,161 +1,101 @@
+"""
+Historical prices from Yahoo Finance and calibration of the volatilities and the correlation of two
+assets. Both asset classes (stocks, crypto) use the same source and the same fixed time window.
+
+Only sigma_1, sigma_2 and rho are estimated. Historical log-returns are observed under the
+real-world measure P; their drift is not used anywhere, because pricing uses the risk-neutral
+drift r - delta. Volatility and correlation are the same under P and Q for a GBM (Girsanov changes
+only the drift), so they can be estimated from historical data.
+"""
+from __future__ import annotations
+
 import os
-import requests
-import pandas as pd
+from datetime import date, timedelta
+
 import numpy as np
-import yfinance as yf
-from datetime import datetime
+import pandas as pd
+
+# Fixed calibration window (inclusive), identical for all asset classes.
+START_DATE = "2022-01-01"
+END_DATE = "2025-12-31"
+
 
 class HistoricalDataFetcher:
-    def __init__(self, ticker_1: str, ticker_2: str, start_date: str, asset_class: str = "stock", cache_dir: str = "data"):
-        """
-        Initializes the fetcher.
-        :param asset_class: "stock" (uses Yahoo Finance) or "crypto" (uses Binance Public API)
-        """
+    """
+    Daily adjusted closing prices of two Yahoo Finance tickers in a fixed window
+    [start_date, end_date] (both inclusive), cached as CSV in data/.
+
+    Annualisation: 252 trading days per year for stocks, 365 for crypto (traded every day).
+    """
+
+    def __init__(self, ticker_1: str, ticker_2: str, asset_class: str = "stock",
+                 start_date: str = START_DATE, end_date: str = END_DATE,
+                 cache_dir: str = "data") -> None:
+        if asset_class not in ("stock", "crypto"):
+            raise ValueError("asset_class must be 'stock' or 'crypto'")
         self.ticker_1 = ticker_1.upper()
         self.ticker_2 = ticker_2.upper()
+        self.asset_class = asset_class
         self.start_date = start_date
-        self.asset_class = asset_class.lower()
+        self.end_date = end_date
         self.cache_dir = cache_dir
-        
-        # Determine annualization factor based on asset class
-        self.trading_days = 365 if self.asset_class == "crypto" else 252
-        
-        os.makedirs(self.cache_dir, exist_ok=True)
-        self.cache_path = os.path.join(self.cache_dir, f"{self.ticker_1}_{self.ticker_2}_{self.start_date}_{self.asset_class}.csv")
+        self.periods_per_year = 365 if asset_class == "crypto" else 252
+        self.cache_path = os.path.join(
+            cache_dir, f"yahoo_{self.ticker_1}_{self.ticker_2}_{start_date}_{end_date}.csv")
 
     def fetch_data(self) -> pd.DataFrame:
-        """
-        Fetches adjusted daily closing prices from cache, Yahoo Finance, or Binance.
-        """
+        """Prices from the cache if present, otherwise downloaded from Yahoo Finance and cached."""
         if os.path.exists(self.cache_path):
-            print(f"Loading {self.asset_class.upper()} data from cache: {self.cache_path}")
+            print(f"Loading data from cache: {self.cache_path}")
             return pd.read_csv(self.cache_path, index_col="Date", parse_dates=True)
-            
-        print(f"Downloading historical data for {self.ticker_1} and {self.ticker_2}...")
-        
-        if self.asset_class == "crypto":
-            df = self._fetch_binance()
-        else:
-            df = self._fetch_yahoo()
-            
-        # Drop any missing values and save to cache
-        df = df.dropna()
-        df.to_csv(self.cache_path)
-        print(f"Data successfully saved to cache: {self.cache_path}")
-        
-        return df
 
-    def _fetch_yahoo(self) -> pd.DataFrame:
-        """
-        Fetches data from Yahoo Finance. 
-        Uses yf.Ticker().history() to bypass recent yf.download() MultiIndex bugs 
-        and missing 'Adj Close' columns.
-        """
-        # Fetch history directly (this automatically returns adjusted close prices in 'Close')
-        t1_data = yf.Ticker(self.ticker_1).history(start=self.start_date)
-        t2_data = yf.Ticker(self.ticker_2).history(start=self.start_date)
-        
-        # Extract the Close column and rename it to the ticker symbol
-        s1 = t1_data['Close'].rename(self.ticker_1)
-        s2 = t2_data['Close'].rename(self.ticker_2)
-        
-        # Combine both series into one DataFrame
-        df = pd.concat([s1, s2], axis=1).dropna()
-        
-        # Remove timezone information from the index to keep it clean and compatible
-        if df.index.tz is not None:
-            df.index = df.index.tz_localize(None)
-            
-        return df
+        import yfinance as yf  # imported lazily: only needed when the cache is missing
 
-    def _fetch_binance(self) -> pd.DataFrame:
-        """Fetches data from Binance Public API (No key required)."""
-        def get_binance_klines(symbol):
-            # Convert start_date to milliseconds timestamp
-            start_ts = int(datetime.strptime(self.start_date, "%Y-%m-%d").timestamp() * 1000)
-            url = "https://api.binance.com/api/v3/klines"
-            
-            # Binance limits to 1000 days per request. 1000 days is ~2.7 years.
-            params = {
-                "symbol": symbol,
-                "interval": "1d",
-                "startTime": start_ts,
-                "limit": 1000 
-            }
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            
-            data = response.json()
-            # Index 0: Open time, Index 4: Close price
-            dates = [datetime.fromtimestamp(row[0] / 1000).date() for row in data]
-            closes = [float(row[4]) for row in data]
-            
-            return pd.Series(closes, index=pd.to_datetime(dates), name=symbol)
-
-        # Use USDT pairs for Binance (e.g., BTCUSDT, ETHUSDT)
-        sym_1 = f"{self.ticker_1}USDT"
-        sym_2 = f"{self.ticker_2}USDT"
-        
-        s1 = get_binance_klines(sym_1)
-        s2 = get_binance_klines(sym_2)
-        
-        df = pd.concat([s1, s2], axis=1)
-        df.columns = [self.ticker_1, self.ticker_2]
+        print(f"Downloading {self.ticker_1}, {self.ticker_2} from Yahoo Finance "
+              f"({self.start_date} to {self.end_date})...")
+        # yfinance treats `end` as exclusive, so request one day more.
+        end_excl = (date.fromisoformat(self.end_date) + timedelta(days=1)).isoformat()
+        series = []
+        for tk in (self.ticker_1, self.ticker_2):
+            hist = yf.Ticker(tk).history(start=self.start_date, end=end_excl, auto_adjust=True)
+            if hist.empty:
+                raise RuntimeError(f"no data returned for {tk}")
+            s = hist["Close"].rename(tk)
+            if s.index.tz is not None:
+                s.index = s.index.tz_localize(None)
+            s.index = s.index.normalize()
+            series.append(s)
+        df = pd.concat(series, axis=1).dropna()
         df.index.name = "Date"
+        os.makedirs(self.cache_dir, exist_ok=True)
+        df.to_csv(self.cache_path)
+        print(f"Saved to cache: {self.cache_path}")
         return df
 
-    def calculate_historical_parameters(self, df: pd.DataFrame) -> dict:
+    def calibrate(self, df: pd.DataFrame) -> dict:
         """
-        Calculates annualized parameters (mu, sigma, rho) using the correct 
-        annualization factor (252 for stocks, 365 for crypto).
+        Annualised volatilities (sample std of daily log-returns times sqrt(periods per year))
+        and the correlation of the daily log-returns. No drift is estimated.
         """
-        print(f"\nCalculating parameters based on {self.trading_days} trading days/year...")
-        
-        log_returns = np.log(df / df.shift(1)).dropna()
-        
-        # Annualized Volatility
-        sigma_1 = log_returns[self.ticker_1].std() * np.sqrt(self.trading_days)
-        sigma_2 = log_returns[self.ticker_2].std() * np.sqrt(self.trading_days)
-        
-        # Annualized Drift (Itô adjustment included)
-        mu_1 = (log_returns[self.ticker_1].mean() * self.trading_days) + (0.5 * sigma_1**2)
-        mu_2 = (log_returns[self.ticker_2].mean() * self.trading_days) + (0.5 * sigma_2**2)
-        
-        # Correlation
-        rho = log_returns[self.ticker_1].corr(log_returns[self.ticker_2])
-        
+        log_ret = np.log(df / df.shift(1)).dropna()
+        a = np.sqrt(self.periods_per_year)
         params = {
-            "S0_1": float(df[self.ticker_1].iloc[-1]),
-            "S0_2": float(df[self.ticker_2].iloc[-1]),
-            "mu_1": float(mu_1),
-            "mu_2": float(mu_2),
-            "sigma_1": float(sigma_1),
-            "sigma_2": float(sigma_2),
-            "rho": float(rho),
-            "asset_class": self.asset_class
+            "sigma_1": float(log_ret[self.ticker_1].std(ddof=1) * a),
+            "sigma_2": float(log_ret[self.ticker_2].std(ddof=1) * a),
+            "rho": float(log_ret[self.ticker_1].corr(log_ret[self.ticker_2])),
+            "n_returns": int(len(log_ret)),
+            "first_date": str(df.index[0].date()),
+            "last_date": str(df.index[-1].date()),
+            "periods_per_year": self.periods_per_year,
         }
-        
-        for key, value in params.items():
-            if isinstance(value, float):
-                print(f"{key}: {value:.4f}")
-            else:
-                print(f"{key}: {value}")
-                
+        print(f"{self.ticker_1}/{self.ticker_2}: sigma_1 = {params['sigma_1']:.4f}, "
+              f"sigma_2 = {params['sigma_2']:.4f}, rho = {params['rho']:.4f} "
+              f"({params['n_returns']} daily returns, {params['first_date']} to "
+              f"{params['last_date']}, {self.periods_per_year} periods/year)")
         return params
 
+
 if __name__ == "__main__":
-    # --- Test 1: Traditional Tech Stocks (Yahoo Finance) ---
-    print("=== TEST 1: TECH STOCKS ===")
-    tech_fetcher = HistoricalDataFetcher(
-        ticker_1="AAPL", ticker_2="MSFT", start_date="2022-01-01", asset_class="stock"
-    )
-    tech_df = tech_fetcher.fetch_data()
-    tech_params = tech_fetcher.calculate_historical_parameters(tech_df)
-    
-    # --- Test 2: Crypto (Binance API) ---
-    print("\n=== TEST 2: CRYPTO ===")
-    crypto_fetcher = HistoricalDataFetcher(
-        ticker_1="BTC", ticker_2="ETH", start_date="2022-01-01", asset_class="crypto"
-    )
-    crypto_df = crypto_fetcher.fetch_data()
-    crypto_params = crypto_fetcher.calculate_historical_parameters(crypto_df)
+    for t1, t2, cls in (("AAPL", "MSFT", "stock"), ("BTC-USD", "ETH-USD", "crypto")):
+        f = HistoricalDataFetcher(t1, t2, cls)
+        f.calibrate(f.fetch_data())
