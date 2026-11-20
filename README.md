@@ -22,7 +22,8 @@ Main findings (details and all numbers below):
   indistinguishable, also at low path counts and σ = 0.8. The difference at high volatility is in
   the bias (policy quality), not the variance.
 - **Basis.** Scaling the basis by the strike lowers the condition number by 3.5–5.4 orders of
-  magnitude but changes no price. A complete degree-3 basis is *worse* than degree 2 at 4,000 training paths.
+  magnitude but changes no price. A complete degree-3 basis is *worse* than degree 2 at 4,000
+  training paths.
 
 ## Background and changes
 
@@ -109,9 +110,9 @@ unbiased for the value of the policy, and thus low-biased for the Bermudan price
 
 **Upper bound by duality.** For the learned policy, build the Andersen–Broadie martingale
 M_i = Σ_{k<i} (L_{k+1} − Q_k). Here L_k is the value of following the policy from t_k on, and
-Q_k = E_k[L_{k+1}] is its continuation value, estimated by nested (inner) simulation. Then
-U = L + E[max_i (h_i − M_i − L)] is an upper bound (Andersen and Broadie 2004; Glasserman 2003,
-Sec. 8.7):
+Q_k = E_k[L_{k+1}] is its continuation value, estimated by nested (inner) simulation (Q_0 is
+estimated by the lower bound L). Then V_0 ≤ U = E[max_i (h_i − M_i)] = L + gap, with a pathwise
+non-negative gap (Andersen and Broadie 2004; Glasserman 2003, Sec. 8.7):
 - U stays high-biased for any number of inner paths, because the inner estimates enter M linearly
   and Jensen's inequality applies.
 - The maximum is restricted to in-the-money dates and maturity. This is valid because stopping
@@ -221,8 +222,8 @@ S0 = 100, R = 50, all eight configurations on the same paths
 | TVR | degree 3 | 13.8218 (0.0305) | −0.078 | 8.3 → 3.0 |
 
 - **Scaling** lowers the median condition number by 3.5–5.4 orders of magnitude but gives
-  bit-identical prices on all 50 runs. In double precision the raw basis is not ill-conditioned enough to change a
-  single exercise decision.
+  bit-identical prices on all 50 runs. In double precision the raw basis is not ill-conditioned
+  enough to change a single exercise decision.
 - **Degree 3** gives a lower mean than degree 2: paired difference −0.0286 for LSM (Holm p = 0.011)
   and −0.0123 for TVR (p = 0.14). With 4,000 training paths the four extra coefficients add more
   estimation noise to the policy than they remove approximation error.
