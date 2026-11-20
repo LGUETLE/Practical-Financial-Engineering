@@ -1,31 +1,22 @@
-# 1. Python Bytecode & Caches (z. B. der besprochene Ordner)
+# Generated data and outputs (results/ is curated and committed)
+data/
+output_plots/
+output_tables/
+
+# Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-
-# 2. Virtuelle Umgebungen (Packages und Libraries)
 .venv/
-venv/
-env/
-ENV/
 
-# 3. Projekt-spezifische Output-Ordner (werden vom Skript generiert)
-output_tables/
-output_plots/
-
-# 4. Daten & CSV-Dateien (wichtig für Kaggle/Marktdaten)
+# Course material and binary/data files
+*.pdf
+*.docx
 *.csv
 *.xlsx
 *.zip
-kaggle_data/
-.kaggle/
 
-# 5. IDEs und Editoren (VS Code, PyCharm, etc.)
-.vscode/
-.idea/
-*.swp
+# Local assistant instructions (never committed)
+CLAUDE.md
 
-# 6. Betriebssystem-Müll (Mac / Windows)
+# OS
 .DS_Store
-Thumbs.db
