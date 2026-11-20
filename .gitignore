@@ -20,3 +20,6 @@ CLAUDE.md
 
 # OS
 .DS_Store
+
+# Local stage-2 run log (never committed)
+stage2_log.md
