@@ -39,6 +39,8 @@ code. Since then I have revised and extended it individually:
 - Empirical part: Yahoo Finance for stocks and crypto (Binance removed), one fixed window
   2022-01-01 to 2025-12-31; only σ and ρ are calibrated (the unused drift estimate is removed);
   with δ = 0 the exact European (Stulz) price serves as reference for the bias of all four methods.
+- Stress test seeded, with all four methods, the scaled basis, variance tests and a duality
+  reference interval.
 
 ## Model and methods
 
@@ -218,6 +220,31 @@ significant at any σ after the correction.
 
 ![Bias against the Stulz price vs volatility](results/empirical_sigma_sensitivity.png)
 
+### Stress test: low path counts at σ = 0.8
+
+Glasserman parameters with σ = 0.8, N ∈ {250, …, 4,000} training and pricing paths, R = 50
+replications per N, all methods on the same paths; classic LSM is also run with the raw (unscaled)
+basis ([`results/stresstest.md`](results/stresstest.md)).
+
+| N | Classic LSM mean (var) | TVR mean (var) | Var LSM / Var TVR | Holm p (variance) | TVR − LSM (SE) |
+|---:|---:|---:|---:|---:|---:|
+| 250 | 65.59 (100.2) | 71.33 (118.2) | 0.85 | 1.00 | +5.74 (1.16) |
+| 500 | 67.06 (42.9) | 70.74 (45.0) | 0.95 | 1.00 | +3.68 (0.77) |
+| 1,000 | 68.36 (37.2) | 71.42 (35.7) | 1.04 | 1.00 | +3.06 (0.46) |
+| 2,000 | 69.26 (15.6) | 71.57 (14.3) | 1.09 | 1.00 | +2.32 (0.40) |
+| 4,000 | 69.95 (9.7) | 71.61 (7.4) | 1.32 | 0.91 | +1.67 (0.32) |
+
+The LSM variance blow-up suggested by the earlier, unseeded runs does not appear. Variances of
+LSM and TVR are statistically indistinguishable at every N (Pitman–Morgan, Holm-corrected), and
+both fall roughly like 1/N. Scaling the basis does not matter either: raw and scaled LSM give
+identical prices at every N, although the raw condition numbers reach 10^8. What does differ is
+the **bias**. LSM's mean is lower by 1.7–5.7 (all Holm p < 1e-4), so its policy is clearly worse
+at high volatility and small N. The duality interval of a TVR policy trained on 100,000 paths is
+[71.97, 75.51] (L = 72.61, U = 74.84). Its gap of 2.2 (3% of the price) shows that the degree-2
+basis approximates the continuation value much less well at σ = 0.8 than at σ = 0.2.
+
+![Variance vs N](results/stresstest_variance.png)
+
 ### Estimated exercise region
 
 Estimated exercise region at exercise date i = 4 (t = 4/3), from a TVR model trained on 20,000
@@ -228,7 +255,7 @@ other, and continues near the diagonal S_1 = S_2.
 
 ## Work in progress
 
-The stress test (`stresstest_engine.py`) is being revised and is not reported here yet. Planned next: the European max-call closed form (Stulz 1982)
+ Planned next: the European max-call closed form (Stulz 1982)
 as benchmark and control variate, a duality-based upper bound (Andersen–Broadie 2004), and `pytest`
 tests.
 
