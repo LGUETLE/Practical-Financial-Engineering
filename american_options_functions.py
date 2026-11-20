@@ -125,11 +125,21 @@ def lsm_train_max(train1: np.ndarray, train2: np.ndarray,
 
     return dict(betas=betas, K=K, r=r, T=T, m=m, method=method)
 
-def lsm_price_max(model: dict, price1: np.ndarray, price2: np.ndarray) -> float:
+def lsm_price_max(model: dict, price1: np.ndarray, price2: np.ndarray,
+                  return_se: bool = False) -> float | tuple[float, float]:
     """
     Forward pass (Out-of-Sample Pricing).
-    The method is identical for LSM and TVR since the decision rule 
+    The method is identical for LSM and TVR since the decision rule
     only relies on the trained beta coefficients.
+
+    The exercise policy is learned on separate training paths and applied to
+    the independent pricing paths given here, so the estimator is low-biased
+    (E[price] <= true Bermudan price).
+
+    If return_se is True, also returns the standard error of the estimate:
+    sample std (ddof=1) of the discounted pathwise payoffs divided by sqrt(n).
+    It reflects the noise of the pricing paths only, conditional on the
+    trained policy (training-path noise is not included).
     """
     betas = model["betas"]
     K, r, T, m = model["K"], model["r"], model["T"], model["m"]
@@ -166,5 +176,9 @@ def lsm_price_max(model: dict, price1: np.ndarray, price2: np.ndarray) -> float:
     ex_times[not_ex] = m
 
     # Discount all cash flows to t=0
-    price = float(np.mean(payoffs * df_step ** ex_times))
+    discounted = payoffs * df_step ** ex_times
+    price = float(np.mean(discounted))
+    if return_se:
+        se = float(np.std(discounted, ddof=1) / np.sqrt(n))
+        return price, se
     return price
