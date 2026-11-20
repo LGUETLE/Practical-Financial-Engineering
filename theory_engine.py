@@ -8,9 +8,157 @@ import scipy.stats as stats  # <-- NEW: Required for Confidence Intervals
 from american_options_functions import (
     simulate_gbm, 
     basis_max, 
+    continuation_value,
     lsm_train_max, 
-    lsm_price_max
+    lsm_price_max,
+    DEFAULT_DEGREE,
+    DEFAULT_SCALE,
 )
+from mc_stats import summarize, paired_t, holm, df_to_markdown, write_result
+
+# Glasserman (2003), Example 8.6.1: two independent assets, 9 exercise dates.
+BENCH = dict(K=100.0, T=3.0, r=0.05, delta=0.10, sigma=0.20, m=9)
+# Reference prices from Glasserman (binomial lattice).
+REFERENCE = {90.0: 8.08, 100.0: 13.90, 110.0: 21.34}
+
+
+def benchmark_paths(S0: float, n_train: int, n_price: int,
+                    rng: np.random.Generator) -> tuple[np.ndarray, ...]:
+    """Training and independent pricing paths (two independent GBMs each) for the benchmark."""
+    b = BENCH
+    t1 = simulate_gbm(S0, b["sigma"], b["r"], b["delta"], b["T"], b["m"], n_train, rng)
+    t2 = simulate_gbm(S0, b["sigma"], b["r"], b["delta"], b["T"], b["m"], n_train, rng)
+    p1 = simulate_gbm(S0, b["sigma"], b["r"], b["delta"], b["T"], b["m"], n_price, rng)
+    p2 = simulate_gbm(S0, b["sigma"], b["r"], b["delta"], b["T"], b["m"], n_price, rng)
+    return t1, t2, p1, p2
+
+
+def run_basis_ablation(S0: float = 100.0, R: int = 50, n_paths: int = 4000,
+                       seed: int = 2026) -> tuple[pd.DataFrame, dict]:
+    """
+    Basis ablation on the Glasserman benchmark: basis {degree 2, degree 3} x scaling
+    {raw S, S/K} for classic LSM and TVR. Common random numbers: in replication k all eight
+    configurations are trained and priced on the same training and pricing paths
+    (generator default_rng([seed, 1, k])). Reports mean, SE, bias, RMSE against the reference
+    and the 2-norm condition numbers of the regression matrices (over all dates and runs).
+    All prices are low-biased, so the basis with the higher mean price gives the better policy.
+    """
+    print(f"\n--- Basis ablation (S0 = {S0}, R = {R}, N = {n_paths}) ---")
+    b = BENCH
+    configs = [(meth, deg, sc) for meth in ("LSM", "TVR") for deg in (2, 3) for sc in (False, True)]
+    prices = {c: np.empty(R) for c in configs}
+    conds = {c: [] for c in configs}
+    for k in range(R):
+        rng = np.random.default_rng([seed, 1, k])
+        t1, t2, p1, p2 = benchmark_paths(S0, n_paths, n_paths, rng)
+        for c in configs:
+            model = lsm_train_max(t1, t2, b["K"], b["r"], b["T"], method=c[0],
+                                  degree=c[1], scale=c[2], diagnostics=True)
+            prices[c][k] = lsm_price_max(model, p1, p2)
+            conds[c].extend(model["cond"].values())
+
+    ref = REFERENCE[S0]
+    rows = []
+    for c in configs:
+        st = summarize(prices[c], ref)
+        lc = np.log10(conds[c])
+        rows.append({"Method": "Classic LSM" if c[0] == "LSM" else "TVR",
+                     "Basis": f"deg {c[1]} ({7 if c[1] == 2 else 11} terms)",
+                     "Scaling": "S/K" if c[2] else "raw",
+                     "Mean": st["mean"], "SE": st["se"], "Bias": st["bias"], "RMSE": st["rmse"],
+                     "log10 cond (median)": float(np.median(lc)),
+                     "log10 cond (max)": float(np.max(lc))})
+    df = pd.DataFrame(rows)
+    print(df.to_string(index=False))
+
+    # Scaling: identical policy up to floating point?
+    scale_rows = []
+    for meth in ("LSM", "TVR"):
+        for deg in (2, 3):
+            d = prices[(meth, deg, True)] - prices[(meth, deg, False)]
+            scale_rows.append({"Method": meth, "Degree": deg,
+                               "max abs. difference over runs": float(np.max(np.abs(d))),
+                               "runs with any difference": int(np.sum(d != 0.0))})
+    df_scale = pd.DataFrame(scale_rows)
+    print(df_scale.to_string(index=False))
+
+    # Degree: paired t-test deg 3 - deg 2 (scaled), Holm over the two methods
+    tests = [paired_t(prices[(meth, 3, True)], prices[(meth, 2, True)]) for meth in ("LSM", "TVR")]
+    p_holm = holm([t["p"] for t in tests])
+    deg_rows = []
+    for meth, t, ph in zip(("Classic LSM", "TVR"), tests, p_holm):
+        deg_rows.append({"Method": meth, "Mean diff deg3 - deg2": t["diff"], "SE": t["se"],
+                         "t": t["t"], "p": t["p"], "p (Holm)": ph,
+                         "95% CI": f"[{t['ci_low']:.4f}, {t['ci_high']:.4f}]"})
+    df_deg = pd.DataFrame(deg_rows)
+    print(df_deg.to_string(index=False))
+
+    # Choice of default basis: higher mean price, averaged over both methods (scaled)
+    mean_deg = {deg: np.mean([np.mean(prices[(meth, deg, True)]) for meth in ("LSM", "TVR")])
+                for deg in (2, 3)}
+    chosen = max(mean_deg, key=mean_deg.get)
+    choice = dict(degree=chosen, scale=True, mean_by_degree=mean_deg)
+    print(f"Mean price by degree (avg over LSM, TVR; scaled): {mean_deg} -> default degree {chosen}")
+
+    text = (f"# Basis ablation (Glasserman benchmark, S0 = {S0:g})\n\n"
+            f"R = {R} replications, N = {n_paths:,} training and {n_paths:,} independent pricing "
+            f"paths per replication; all eight configurations use the same paths in each "
+            f"replication (common random numbers, seed {seed}). Reference {ref:.2f}. SE = standard "
+            f"error of the mean over replications. Condition numbers (2-norm) of the regression "
+            f"matrix over all exercise dates and replications (LSM: ITM rows only). "
+            f"Generated by `theory_engine.py`.\n\n"
+            + df_to_markdown(df, {"Mean": "{:.4f}", "SE": "{:.4f}", "Bias": "{:+.4f}",
+                                  "RMSE": "{:.4f}", "log10 cond (median)": "{:.1f}",
+                                  "log10 cond (max)": "{:.1f}"})
+            + "\n\nScaled vs raw basis on the same paths (difference of the price estimates):\n\n"
+            + df_to_markdown(df_scale, {"max abs. difference over runs": "{:.2e}"})
+            + "\n\nPaired t-test, degree 3 vs degree 2 (scaled), Holm correction over the two "
+              "methods:\n\n"
+            + df_to_markdown(df_deg, {"Mean diff deg3 - deg2": "{:+.4f}", "SE": "{:.4f}",
+                                      "t": "{:.3f}", "p": "{:.4f}", "p (Holm)": "{:.4f}"})
+            + f"\n\nMean price by degree (average of LSM and TVR, scaled basis): "
+              f"degree 2: {mean_deg[2]:.4f}, degree 3: {mean_deg[3]:.4f}.\n")
+    write_result("basis_ablation", text)
+    os.makedirs("output_tables", exist_ok=True)
+    df.to_csv("output_tables/basis_ablation.csv", index=False)
+    return df, choice
+
+
+def run_benchmark_replications(methods: tuple[str, ...] = ("LSM", "TVR"),
+                               S0_values: tuple[float, ...] = (90.0, 100.0, 110.0),
+                               R: int = 50, n_paths: int = 4000, seed: int = 2026,
+                               degree: int = DEFAULT_DEGREE,
+                               scale: bool = DEFAULT_SCALE) -> dict:
+    """
+    R independent replications of the Glasserman benchmark for each S0. In replication k all
+    methods use the same training and pricing paths (common random numbers), and the same
+    normals are reused across S0 (generator default_rng([seed, 2, k])).
+    Returns {(S0, method): array of R low-biased price estimates}.
+    """
+    b = BENCH
+    out = {(S0, meth): np.empty(R) for S0 in S0_values for meth in methods}
+    for S0 in S0_values:
+        for k in range(R):
+            rng = np.random.default_rng([seed, 2, k])
+            t1, t2, p1, p2 = benchmark_paths(S0, n_paths, n_paths, rng)
+            for meth in methods:
+                model = lsm_train_max(t1, t2, b["K"], b["r"], b["T"], method=meth,
+                                      degree=degree, scale=scale)
+                out[(S0, meth)][k] = lsm_price_max(model, p1, p2)
+    return out
+
+
+def summarize_benchmark(prices: dict, methods: tuple[str, ...]) -> pd.DataFrame:
+    """Mean, SE, 95% CI, bias and RMSE against the Glasserman reference per (S0, method)."""
+    rows = []
+    for (S0, meth), x in prices.items():
+        if meth not in methods:
+            continue
+        st = summarize(x, REFERENCE[S0])
+        rows.append({"S0": S0, "Method": meth, "Mean": st["mean"], "SE": st["se"],
+                     "CI low": st["ci_low"], "CI high": st["ci_high"],
+                     "Reference": REFERENCE[S0], "Bias": st["bias"], "RMSE": st["rmse"]})
+    return pd.DataFrame(rows)
 
 # ==============================================================================
 # ANALYSIS & PLOTTING FUNCTIONS
@@ -125,8 +273,7 @@ def plot_exercise_boundary(model: dict, step_index: int = 4):
     h_flat = np.maximum(np.maximum(S1_flat, S2_flat) - K, 0.0)
     
     # Calculate continuation value on the grid
-    Phi = basis_max(S1_flat, S2_flat, K)
-    C_hat_flat = np.maximum(Phi @ beta, 0.0)
+    C_hat_flat = continuation_value(model, step_index, S1_flat, S2_flat)
     
     # Determine where immediate exercise is optimal
     exercise_flat = h_flat > C_hat_flat
@@ -322,6 +469,16 @@ if __name__ == "__main__":
     sigma_val = 0.20    # Volatility (20%)
     m_steps = 9         # Number of early exercise opportunities
     n_paths = 4000      # Number of paths for both training and pricing
+
+    # 2.1 Basis ablation (degree x scaling, LSM and TVR)
+    run_basis_ablation(S0=S0_base, R=50, n_paths=n_paths)
+
+    # 2.2 Replicated benchmark at S0 = 90/100/110 with the default basis
+    methods = ("LSM", "TVR")
+    bench = run_benchmark_replications(methods, R=50, n_paths=n_paths)
+    df_bench = summarize_benchmark(bench, methods)
+    print(f"\nReplicated benchmark (R = 50, basis degree {DEFAULT_DEGREE}, scaled = {DEFAULT_SCALE}):")
+    print(df_bench.to_string(index=False))
 
     # 3.0 Run theoretical comparison of Classic LSM vs TVR (Increased to 50 runs for statistical significance!)
     compare_lsm_tvr_theory(

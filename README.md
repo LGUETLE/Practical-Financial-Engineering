@@ -24,6 +24,12 @@ code. Since then I have revised and extended it individually:
   (the historically estimated drift is not used for pricing); added a 2D volatility sensitivity
   plot comparing LSM and TVR.
 - `results/` folder with the tables and figures shown below, generated from a documented run.
+- Reproducibility: all randomness comes from `np.random.default_rng(seed)` generators passed
+  explicitly to the simulation functions (no global NumPy seed). This changed the random stream:
+  on the new stream the paired TVR − LSM difference at S0 = 100 is −0.0039 (SE 0.0097, p = 0.69),
+  so the earlier significant result (p = 0.0008) did not replicate (see the 2x2 comparison below).
+- Regression basis: degree 2 or complete degree 3 (+ intrinsic value), evaluated on S/K. A basis
+  ablation chose degree 2 scaled by K as default.
 
 ## Model and methods
 
@@ -34,8 +40,28 @@ m = 9 equally spaced dates t_i = iT/9 up to maturity and pays h(S_1, S_2) = max(
 Benchmark parameters (Glasserman, Example 8.6.1): K = 100, T = 3, r = 0.05, δ = 0.10, σ = 0.20,
 S_0 ∈ {90, 100, 110}. Paths are simulated exactly on the exercise grid.
 
-**Regression basis.** At each exercise date the continuation value is regressed on 7 functions:
-1, S_1, S_2, S_1², S_2², S_1·S_2 and the intrinsic value h(S_1, S_2).
+**Regression basis.** At each exercise date the continuation value is regressed on a complete
+polynomial in x_j = S_j / K plus the intrinsic value h / K. Degree 2 (default): 1, x_1, x_2, x_1²,
+x_2², x_1·x_2, h/K (7 terms); degree 3 adds x_1³, x_1²x_2, x_1x_2², x_2³ (11 terms). Dividing by
+the fixed strike K uses no information from the simulated paths; it is a constant rescaling of the
+columns, so it leaves the fitted policy unchanged and only improves the conditioning.
+
+**Basis ablation** (S0 = 100, R = 50 replications, N = 4,000, all configurations on the same paths;
+full table in [`results/basis_ablation.md`](results/basis_ablation.md)):
+
+| Method | Basis | Mean (SE) | median log10 cond, raw → S/K |
+|---|---|---|---|
+| Classic LSM | degree 2 | 13.8117 (0.0337) | 6.0 → 2.3 |
+| Classic LSM | degree 3 | 13.7831 (0.0319) | 8.7 → 3.3 |
+| TVR | degree 2 | 13.8340 (0.0311) | 5.6 → 2.1 |
+| TVR | degree 3 | 13.8218 (0.0305) | 8.3 → 3.0 |
+
+Scaling lowers the condition number by 3–5 orders of magnitude but gives bit-identical prices on
+all 50 runs: in double precision the raw basis is not ill-conditioned enough to change a single
+exercise decision. Degree 3 gives a *lower* mean price than degree 2 (paired difference −0.0286,
+Holm-adjusted p = 0.011 for LSM; −0.0123, p = 0.14 for TVR): with 4,000 training paths the four
+extra coefficients add more estimation noise to the policy than they remove approximation error.
+Since both estimators are low-biased, degree 2 (scaled) is the default.
 
 **Longstaff–Schwartz (LSM).** The backward pass regresses the *realized* discounted cash flow of
 each path (the payoff obtained by following the policy estimated at later dates) on the basis

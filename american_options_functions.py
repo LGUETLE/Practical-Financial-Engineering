@@ -61,33 +61,78 @@ def simulate_correlated_gbm(S0_1: float, S0_2: float, mu_1: float, mu_2: float,
 #  2. BASIS FUNCTIONS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def basis_max(S1: np.ndarray, S2: np.ndarray, K: float) -> np.ndarray:
-    """
-    Regression basis for the continuation value of the max-call: 7 terms.
+# Default regression basis, chosen by the ablation in theory_engine.py (run_basis_ablation):
+# degree 2 gave the higher mean (low-biased) price than degree 3 at N = 4,000 for both LSM and
+# TVR; scaling by K does not change the price but lowers the condition number by ~3-5 orders.
+DEFAULT_DEGREE = 2
+DEFAULT_SCALE = True
 
-    Complete degree-2 polynomial in (S1, S2) -- 1, S1, S2, S1^2, S2^2, S1*S2 --
-    plus the intrinsic value max(max(S1, S2) - K, 0). The polynomials are not
-    scaled; K is used only for the intrinsic-value term.
+
+def basis_max(S1: np.ndarray, S2: np.ndarray, K: float,
+              degree: int = DEFAULT_DEGREE, scale: bool = DEFAULT_SCALE) -> np.ndarray:
     """
-    h = np.maximum(np.maximum(S1, S2) - K, 0.0)
-    cols = [
-        np.ones(len(S1)),       # 1 (Constant)
-        S1, S2,                 # Linear terms
-        S1**2, S2**2,           # Quadratic terms
-        S1 * S2,                # Interaction term
-        h                       # Intrinsic value
-    ]
+    Regression basis for the continuation value of the max-call.
+
+    The basis is a complete polynomial of total degree `degree` in (x1, x2) plus
+    the intrinsic value of the option:
+      degree 2:  1, x1, x2, x1^2, x2^2, x1*x2, h                       ->  7 columns
+      degree 3:  the six above + x1^3, x1^2*x2, x1*x2^2, x2^3, h       -> 11 columns
+
+    If `scale` is True, the basis is evaluated on x_j = S_j / K and h = max(max(x1, x2) - 1, 0),
+    i.e. the intrinsic value divided by K. If False, x_j = S_j and h is the raw intrinsic value.
+    Scaling uses only the fixed contract strike K, which is known before any path is
+    simulated, so it uses no information from the training or pricing paths (no data leakage).
+    Scaling by a constant is an invertible linear change of the columns: in exact arithmetic it
+    leaves the least-squares fit, the exercise policy and the price unchanged. It only reduces
+    the condition number of the regression matrix (S^3 ~ 1e6 next to the constant 1 when raw).
+    """
+    if degree not in (2, 3):
+        raise ValueError(f"degree must be 2 or 3, got {degree}")
+    if scale:
+        x1, x2 = S1 / K, S2 / K
+        h = np.maximum(np.maximum(x1, x2) - 1.0, 0.0)
+    else:
+        x1, x2 = S1, S2
+        h = np.maximum(np.maximum(S1, S2) - K, 0.0)
+    cols = [np.ones(len(x1)), x1, x2, x1**2, x2**2, x1 * x2]
+    if degree == 3:
+        cols += [x1**3, x1**2 * x2, x1 * x2**2, x2**3]
+    cols.append(h)
     return np.column_stack(cols)
+
+
+def basis_size(degree: int) -> int:
+    """Number of columns of basis_max for the given polynomial degree (7 or 11)."""
+    return {2: 7, 3: 11}[degree]
+
+
+def continuation_value(model: dict, i: int, S1: np.ndarray, S2: np.ndarray) -> np.ndarray:
+    """Fitted continuation value max(phi(S)' beta_i, 0) of a trained model at exercise date i."""
+    Phi = basis_max(S1, S2, model["K"], model["degree"], model["scale"])
+    return np.maximum(Phi @ model["betas"][i], 0.0)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  3. LSM / TVR ALGORITHM (Backward & Forward)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def lsm_train_max(train1: np.ndarray, train2: np.ndarray,
-                  K: float, r: float, T: float, method: str = "TVR") -> dict:
+                  K: float, r: float, T: float, method: str = "TVR",
+                  degree: int = DEFAULT_DEGREE, scale: bool = DEFAULT_SCALE,
+                  diagnostics: bool = False) -> dict:
     """
-    Backward induction phase. 
-    Supports Classic LSM (ITM filter) and TVR (Value Iteration).
+    Backward induction on training paths: estimates regression coefficients beta_i of the
+    continuation value at the exercise dates i = 1, ..., m-1 (date m is maturity).
+
+    Methods:
+      "LSM"  classic Longstaff-Schwartz: regress the realized discounted cash flow of the
+             current policy on the basis, in-the-money paths only; propagated values are
+             realized cash flows (regression error affects only the exercise decision).
+      "TVR"  Tsitsiklis-Van Roy: regress on all paths with target max(h_{i+1}, C_hat_{i+1})
+             (regression-based value iteration); fitted values are propagated.
+
+    The coefficients define an exercise policy; the price is obtained out of sample with
+    lsm_price_max (low-biased). With diagnostics=True the model also contains the 2-norm
+    condition number of the regression matrix at each date ("cond").
     """
     m = train1.shape[1] - 1
     dt = T / m
@@ -96,6 +141,7 @@ def lsm_train_max(train1: np.ndarray, train2: np.ndarray,
     # Terminal condition
     V = np.maximum(np.maximum(train1[:, -1], train2[:, -1]) - K, 0.0)
     betas = {}
+    cond = {}
 
     for i in range(m - 1, 0, -1):
         Y = V * df_step  # Discounted future values
@@ -104,13 +150,15 @@ def lsm_train_max(train1: np.ndarray, train2: np.ndarray,
         S2_i = train2[:, i]
         h_i = np.maximum(np.maximum(S1_i, S2_i) - K, 0.0)
         
-        Phi = basis_max(S1_i, S2_i, K)
+        Phi = basis_max(S1_i, S2_i, K, degree, scale)
         
         if method == "LSM":
             # 1. Classic LSM: Regress only over In-The-Money paths
             itm = h_i > 0
             if np.sum(itm) > 0:
                 beta = lstsq(Phi[itm], Y[itm])[0]
+                if diagnostics:
+                    cond[i] = float(np.linalg.cond(Phi[itm]))
             else:
                 beta = np.zeros(Phi.shape[1])
             betas[i] = beta
@@ -125,19 +173,28 @@ def lsm_train_max(train1: np.ndarray, train2: np.ndarray,
             # 1. TVR: Regress over ALL paths
             beta = lstsq(Phi, Y)[0]
             betas[i] = beta
+            if diagnostics:
+                cond[i] = float(np.linalg.cond(Phi))
             
             # 2. Value Iteration: Smooth the target variable
             C_hat = np.maximum(Phi @ beta, 0.0)
             V = np.maximum(h_i, C_hat)
+        else:
+            raise ValueError(f"unknown method {method!r}")
 
-    return dict(betas=betas, K=K, r=r, T=T, m=m, method=method)
+    model = dict(betas=betas, K=K, r=r, T=T, m=m, method=method,
+                 degree=degree, scale=scale)
+    if diagnostics:
+        model["cond"] = cond
+    return model
 
 def lsm_price_max(model: dict, price1: np.ndarray, price2: np.ndarray,
                   return_se: bool = False) -> float | tuple[float, float]:
     """
     Forward pass (Out-of-Sample Pricing).
     The method is identical for LSM and TVR since the decision rule
-    only relies on the trained beta coefficients.
+    only relies on the trained beta coefficients: exercise at date i if
+    h_i > max(phi(S_i)' beta_i, 0), otherwise at maturity.
 
     The exercise policy is learned on separate training paths and applied to
     the independent pricing paths given here, so the estimator is low-biased
@@ -148,7 +205,6 @@ def lsm_price_max(model: dict, price1: np.ndarray, price2: np.ndarray,
     It reflects the noise of the pricing paths only, conditional on the
     trained policy (training-path noise is not included).
     """
-    betas = model["betas"]
     K, r, T, m = model["K"], model["r"], model["T"], model["m"]
     df_step = np.exp(-r * (T / m))
 
@@ -166,8 +222,7 @@ def lsm_price_max(model: dict, price1: np.ndarray, price2: np.ndarray,
         S2_i = price2[active, i]
         h_i = np.maximum(np.maximum(S1_i, S2_i) - K, 0.0)
 
-        Phi = basis_max(S1_i, S2_i, K)
-        C_hat = np.maximum(Phi @ betas[i], 0.0)
+        C_hat = continuation_value(model, i, S1_i, S2_i)
         
         ex = h_i > C_hat
 
