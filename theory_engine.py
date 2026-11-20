@@ -274,6 +274,18 @@ def compare_lsm_tvr_theory(S0: float, K: float, T: float, r: float, delta: float
     print(f"Correlation of LSM and TVR prices across runs: {pair_corr:.4f}")
     print(f"Pitman-Morgan test (paired): r = {pm_r:.4f}, p = {pm_p:.4f}")
 
+    # --- Paired t-test for the mean difference TVR - LSM ---
+    # Both prices are low-biased estimates on the same pricing paths, so a
+    # positive mean difference indicates a better exercise policy for TVR.
+    d = y - x
+    d_mean = float(np.mean(d))
+    d_se = float(stats.sem(d))
+    t_res = stats.ttest_rel(y, x)
+    d_low, d_high = stats.t.interval(0.95, num_runs - 1, loc=d_mean, scale=d_se)
+    print(f"\nPaired t-test (H0: E[TVR - LSM] = 0): mean diff = {d_mean:.4f}, "
+          f"SE = {d_se:.4f}, t = {t_res.statistic:.4f}, df = {num_runs - 1}, "
+          f"two-sided p = {t_res.pvalue:.4g}, 95% CI = [{d_low:.4f}, {d_high:.4f}]")
+
     # Export only the summary table to LaTeX
     df_summary.to_latex("output_tables/table_theory_comparison.tex", index=False, float_format="%.4f")
     df_runs.to_csv("output_tables/theory_comparison_runs.csv", index=False)
