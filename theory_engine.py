@@ -481,7 +481,7 @@ def analyze_convergence(S0: float, K: float, T: float, r: float, delta: float, s
     df_results = pd.DataFrame(results)
     return df_results
 
-def plot_exercise_boundary(model: dict, step_index: int = 4):
+def plot_exercise_boundary(model: dict, step_index: int = 4) -> None:
     """
     Plots the estimated exercise region for a specific time step.
     Replicates Glasserman Figure 8.9.
