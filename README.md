@@ -34,6 +34,8 @@ code. Since then I have revised and extended it individually:
   regression sample (ITM vs all paths), with paired tests and Holm correction.
 - European max-call closed form (Stulz 1982), validated against Monte Carlo, and used as a control
   variate in the forward pass.
+- Upper bound by duality (Andersen–Broadie 2004) with nested simulation, giving a price interval
+  for every learned policy (`duality.py`, `bounds_engine.py`).
 
 ## Model and methods
 
@@ -157,6 +159,31 @@ replications as above):
 
 The variance reduction is modest (factor 1.5–1.9): with δ = 0.10 early exercise is worth a lot
 (13.90 vs 11.20 at S0 = 100), so the Bermudan and European payoffs are only moderately correlated.
+
+### Price bounds by duality (Andersen–Broadie)
+
+For a learned policy, the lower bound L is its out-of-sample value (200,000 paths). The upper bound
+U = L + gap comes from the Andersen–Broadie martingale built from the policy's own continuation
+values, which are estimated by nested simulation (4,000 outer paths, 2,000 inner paths per
+in-the-money date). U is high-biased for any number of inner paths. Full table:
+[`results/duality_bounds.md`](results/duality_bounds.md).
+
+| S0 | Policy | L (SE) | U (SE) | Gap (SE) | 95% interval | Reference |
+|---:|---|---:|---:|---:|---|---:|
+| 90 | TVR, 4,000 training paths (default) | 7.9972 (0.0278) | 8.0679 (0.0282) | 0.0707 (0.0047) | [7.9427, 8.1232] | 8.08 |
+| 90 | TVR, 100,000 training paths | 8.0111 (0.0276) | 8.0552 (0.0278) | 0.0441 (0.0034) | [7.9571, 8.1097] | 8.08 |
+| 100 | TVR, 4,000 training paths (default) | 13.8472 (0.0342) | 13.9869 (0.0354) | 0.1397 (0.0089) | [13.7801, 14.0563] | 13.90 |
+| 100 | TVR, 100,000 training paths | 13.8743 (0.0350) | 13.9549 (0.0355) | 0.0806 (0.0058) | [13.8056, 14.0245] | 13.90 |
+| 110 | TVR, 4,000 training paths (default) | 21.2174 (0.0405) | 21.4043 (0.0415) | 0.1868 (0.0090) | [21.1381, 21.4855] | 21.34 |
+| 110 | TVR, 100,000 training paths | 21.2530 (0.0406) | 21.3704 (0.0411) | 0.1174 (0.0067) | [21.1735, 21.4510] | 21.34 |
+
+The Glasserman reference lies inside the 95% interval in all 12 cases (four policies per S0).
+Policies evaluated on the same paths rank identically by lower bound and by gap: a better policy
+(higher L) has a smaller gap. At S0 = 100 the gaps are 0.081 (TVR, 100,000 paths) < 0.140 (TVR,
+4,000) < 0.161 (classic LSM, 4,000) < 0.442 (TVR, 500). The gap separates policies more sharply
+than L: at S0 = 110 classic LSM and TVR have indistinguishable lower bounds (difference −0.0095,
+SE 0.0118), but the LSM gap is larger by 0.025 (SE 0.008, Holm p = 0.002). Runtime about 70 s
+for all 12 bound pairs.
 
 ### Estimated exercise region
 
