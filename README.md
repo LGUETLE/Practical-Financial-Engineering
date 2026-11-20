@@ -32,6 +32,8 @@ code. Since then I have revised and extended it individually:
   ablation chose degree 2 scaled by K as default.
 - 2x2 design separating the regression target (realized cash flow vs value iteration) from the
   regression sample (ITM vs all paths), with paired tests and Holm correction.
+- European max-call closed form (Stulz 1982), validated against Monte Carlo, and used as a control
+  variate in the forward pass.
 
 ## Model and methods
 
@@ -134,6 +136,27 @@ the stage-1 direction holds, but single 50-run experiments of this size can miss
 Single run per S0 (TVR, N = 4,000): see
 [`results/glasserman_replication.md`](results/glasserman_replication.md); deviations from the
 reference of up to 1.3 standard errors are Monte Carlo noise.
+
+### European closed form and control variate
+
+`european.py` implements the Stulz (1982) price of a European call on the maximum of two assets
+with dividend yields and correlation. On seven parameter sets (ρ ∈ {0, ±0.5, 0.3, 0.8, 0.9, −0.9},
+unequal volatilities, spot prices and dividend yields) it agrees with a direct Monte Carlo price
+(N = 2,000,000) within 1.45 standard errors ([`results/stulz_check.md`](results/stulz_check.md)).
+
+The discounted European payoff is used as a control variate for the TVR policy; its coefficient
+is estimated on the training paths, so the estimator remains unbiased for the policy value and
+hence low-biased ([`results/control_variate.md`](results/control_variate.md), same 50
+replications as above):
+
+| S0 | European (Stulz) | Mean plain (SE) | Mean CV (SE) | Corr(Y, X) | VRF per run | Var ratio across runs |
+|---:|---:|---:|---:|---:|---:|---:|
+| 90 | 6.6551 | 8.0201 (0.0289) | 8.0186 (0.0217) | 0.69 | 1.92 | 1.78 |
+| 100 | 11.1957 | 13.8684 (0.0331) | 13.8650 (0.0266) | 0.65 | 1.71 | 1.56 |
+| 110 | 16.9286 | 21.2464 (0.0374) | 21.2390 (0.0307) | 0.60 | 1.56 | 1.49 |
+
+The variance reduction is modest (factor 1.5–1.9): with δ = 0.10 early exercise is worth a lot
+(13.90 vs 11.20 at S0 = 100), so the Bermudan and European payoffs are only moderately correlated.
 
 ### Estimated exercise region
 

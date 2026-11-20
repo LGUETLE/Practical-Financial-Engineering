@@ -197,59 +197,104 @@ def lsm_train_max(train1: np.ndarray, train2: np.ndarray,
         model["cond"] = cond
     return model
 
+def apply_policy(model: dict, S1: np.ndarray, S2: np.ndarray,
+                 first: int = 1) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Applies the trained stopping rule to paths S1, S2 of shape (n, m + 1) from exercise date
+    `first` on: stop at the first date i in {first, ..., m-1} with h_i > max(phi(S_i)' beta_i, 0),
+    otherwise at maturity m. Columns before `first` are ignored.
+    Returns (undiscounted payoff at the stopping date, stopping date index) per path.
+    """
+    K, m = model["K"], model["m"]
+    n = S1.shape[0]
+    active = np.ones(n, dtype=bool)
+    payoff = np.zeros(n)
+    ex_idx = np.full(n, m, dtype=int)
+
+    for i in range(first, m):
+        idx = np.flatnonzero(active)
+        if idx.size == 0:
+            break
+        h = np.maximum(np.maximum(S1[idx, i], S2[idx, i]) - K, 0.0)
+        itm = h > 0                       # exercise requires h > C_hat >= 0
+        cand = idx[itm]
+        if cand.size == 0:
+            continue
+        C_hat = continuation_value(model, i, S1[cand, i], S2[cand, i])
+        ex = h[itm] > C_hat
+        stop = cand[ex]
+        payoff[stop] = h[itm][ex]
+        ex_idx[stop] = i
+        active[stop] = False
+
+    # Terminal payoff for paths that reach maturity
+    rest = np.flatnonzero(active)
+    payoff[rest] = np.maximum(np.maximum(S1[rest, m], S2[rest, m]) - K, 0.0)
+    return payoff, ex_idx
+
+
+def discounted_policy_payoffs(model: dict, S1: np.ndarray, S2: np.ndarray) -> np.ndarray:
+    """Pathwise payoff of the trained policy, discounted to t = 0."""
+    payoff, ex_idx = apply_policy(model, S1, S2)
+    dt = model["T"] / model["m"]
+    return payoff * np.exp(-model["r"] * dt * ex_idx)
+
+
 def lsm_price_max(model: dict, price1: np.ndarray, price2: np.ndarray,
                   return_se: bool = False) -> float | tuple[float, float]:
     """
-    Forward pass (Out-of-Sample Pricing).
-    The method is identical for LSM and TVR since the decision rule
-    only relies on the trained beta coefficients: exercise at date i if
-    h_i > max(phi(S_i)' beta_i, 0), otherwise at maturity.
+    Forward pass (out-of-sample pricing). Identical for all methods: the decision rule
+    depends only on the trained coefficients (exercise at date i if
+    h_i > max(phi(S_i)' beta_i, 0), otherwise continue; payoff at maturity if never exercised).
 
-    The exercise policy is learned on separate training paths and applied to
-    the independent pricing paths given here, so the estimator is low-biased
-    (E[price] <= true Bermudan price).
+    The exercise policy is learned on separate training paths and applied to the independent
+    pricing paths given here, so the estimator is low-biased: E[price] <= true Bermudan price.
 
-    If return_se is True, also returns the standard error of the estimate:
-    sample std (ddof=1) of the discounted pathwise payoffs divided by sqrt(n).
-    It reflects the noise of the pricing paths only, conditional on the
-    trained policy (training-path noise is not included).
+    If return_se is True, also returns the standard error of the estimate: sample std
+    (ddof=1) of the discounted pathwise payoffs divided by sqrt(n). It reflects the noise of
+    the pricing paths only, conditional on the trained policy (training noise not included).
     """
-    K, r, T, m = model["K"], model["r"], model["T"], model["m"]
-    df_step = np.exp(-r * (T / m))
-
-    n = price1.shape[0]
-    exercised = np.zeros(n, dtype=bool)
-    payoffs = np.zeros(n)
-    ex_times = np.full(n, m, dtype=int)
-
-    for i in range(1, m):
-        active = ~exercised
-        if not np.any(active): 
-            break
-
-        S1_i = price1[active, i]
-        S2_i = price2[active, i]
-        h_i = np.maximum(np.maximum(S1_i, S2_i) - K, 0.0)
-
-        C_hat = continuation_value(model, i, S1_i, S2_i)
-        
-        ex = h_i > C_hat
-
-        # Record payoff and exercise time
-        idx = np.where(active)[0]
-        payoffs[idx[ex]] = h_i[ex]
-        ex_times[idx[ex]] = i
-        exercised[idx[ex]] = True
-
-    # Terminal condition for paths that reached maturity
-    not_ex = ~exercised
-    payoffs[not_ex] = np.maximum(np.maximum(price1[not_ex, -1], price2[not_ex, -1]) - K, 0.0)
-    ex_times[not_ex] = m
-
-    # Discount all cash flows to t=0
-    discounted = payoffs * df_step ** ex_times
+    discounted = discounted_policy_payoffs(model, price1, price2)
     price = float(np.mean(discounted))
     if return_se:
-        se = float(np.std(discounted, ddof=1) / np.sqrt(n))
+        se = float(np.std(discounted, ddof=1) / np.sqrt(len(discounted)))
         return price, se
     return price
+
+
+def european_discounted_payoff(S1: np.ndarray, S2: np.ndarray, K: float, r: float,
+                               T: float) -> np.ndarray:
+    """Discounted European max-call payoff e^{-rT} max(max(S1_T, S2_T) - K, 0) per path."""
+    return np.exp(-r * T) * np.maximum(np.maximum(S1[:, -1], S2[:, -1]) - K, 0.0)
+
+
+def lsm_price_max_cv(model: dict, train1: np.ndarray, train2: np.ndarray,
+                     price1: np.ndarray, price2: np.ndarray, euro_price: float) -> dict:
+    """
+    Forward pass with the discounted European max-call payoff X as control variate:
+
+        V_cv = mean(Y - b (X - E[X])),   E[X] = euro_price (Stulz closed form),
+
+    where Y is the discounted payoff of the trained policy on the pricing paths. The
+    coefficient b = Cov(Y, X) / Var(X) is estimated on the *training* paths (policy applied
+    in sample), so it is independent of the pricing paths and V_cv is an exactly unbiased
+    estimator of the policy value; hence it stays low-biased for the Bermudan price.
+
+    Returns price and SE with and without control variate, b, and the variance reduction
+    factor Var(Y) / Var(Y - b X) on the pricing paths.
+    """
+    K, r, T = model["K"], model["r"], model["T"]
+    y_tr = discounted_policy_payoffs(model, train1, train2)
+    x_tr = european_discounted_payoff(train1, train2, K, r, T)
+    cxy = np.cov(y_tr, x_tr, ddof=1)
+    b = float(cxy[0, 1] / cxy[1, 1]) if cxy[1, 1] > 0 else 0.0
+
+    y = discounted_policy_payoffs(model, price1, price2)
+    x = european_discounted_payoff(price1, price2, K, r, T)
+    z = y - b * (x - euro_price)
+    n = len(y)
+    var_y, var_z = float(np.var(y, ddof=1)), float(np.var(z, ddof=1))
+    return dict(price=float(z.mean()), se=float(np.sqrt(var_z / n)),
+                price_plain=float(y.mean()), se_plain=float(np.sqrt(var_y / n)),
+                b=b, vrf=var_y / var_z if var_z > 0 else np.inf,
+                corr=float(np.corrcoef(y, x)[0, 1]))
