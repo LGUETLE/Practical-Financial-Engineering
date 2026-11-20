@@ -14,7 +14,8 @@ from american_options_functions import (
     DEFAULT_DEGREE,
     DEFAULT_SCALE,
 )
-from mc_stats import summarize, paired_t, holm, df_to_markdown, write_result
+from mc_stats import (summarize, paired_t, pitman_morgan, holm, df_to_markdown,
+                      write_result, fmt_p)
 
 # Glasserman (2003), Example 8.6.1: two independent assets, 9 exercise dates.
 BENCH = dict(K=100.0, T=3.0, r=0.05, delta=0.10, sigma=0.20, m=9)
@@ -115,7 +116,7 @@ def run_basis_ablation(S0: float = 100.0, R: int = 50, n_paths: int = 4000,
             + "\n\nPaired t-test, degree 3 vs degree 2 (scaled), Holm correction over the two "
               "methods:\n\n"
             + df_to_markdown(df_deg, {"Mean diff deg3 - deg2": "{:+.4f}", "SE": "{:.4f}",
-                                      "t": "{:.3f}", "p": "{:.4f}", "p (Holm)": "{:.4f}"})
+                                      "t": "{:.3f}", "p": fmt_p, "p (Holm)": fmt_p})
             + f"\n\nMean price by degree (average of LSM and TVR, scaled basis): "
               f"degree 2: {mean_deg[2]:.4f}, degree 3: {mean_deg[3]:.4f}.\n")
     write_result("basis_ablation", text)
@@ -159,6 +160,125 @@ def summarize_benchmark(prices: dict, methods: tuple[str, ...]) -> pd.DataFrame:
                      "CI low": st["ci_low"], "CI high": st["ci_high"],
                      "Reference": REFERENCE[S0], "Bias": st["bias"], "RMSE": st["rmse"]})
     return pd.DataFrame(rows)
+
+
+METHOD_LABEL = {"LSM": "Classic LSM (cash flow, ITM)", "LSM-all": "Cash flow, all paths",
+                "TVR-ITM": "Value iteration, ITM", "TVR": "TVR (value iteration, all)"}
+
+
+def analyze_2x2(prices: dict, S0_values: tuple[float, ...] = (90.0, 100.0, 110.0),
+                R: int = 50, n_paths: int = 4000, seed: int = 2026,
+                confirm: dict | None = None) -> dict:
+    """
+    Analysis of the 2x2 design (target {cash flow, value} x sample {ITM, all}) on the replicated
+    benchmark. All methods are low-biased and priced on the same paths, so for each S0
+      (a) the method with the highest mean is the best policy; the other three are compared
+          with it by paired t-tests,
+      (b) the factorial contrasts per replication are tested with paired t-tests:
+          target effect      = [(V,ITM) - (CF,ITM) + (V,all) - (CF,all)] / 2
+          sample effect      = [(CF,all) - (CF,ITM) + (V,all) - (V,ITM)] / 2
+          interaction        = (V,all) - (V,ITM) - (CF,all) + (CF,ITM).
+    Holm correction is applied over all tests of (a) together (9) and of (b) together (9).
+    """
+    methods = list(METHOD_LABEL)
+    df_sum = summarize_benchmark(prices, tuple(methods))
+    df_sum.insert(2, "Target", [("cash flow" if m.startswith("LSM") else "value") for m in df_sum["Method"]])
+    df_sum.insert(3, "Sample", [("ITM" if m in ("LSM", "TVR-ITM") else "all") for m in df_sum["Method"]])
+
+    best_rows, contrast_rows = [], []
+    for S0 in S0_values:
+        means = {m: float(np.mean(prices[(S0, m)])) for m in methods}
+        best = max(means, key=means.get)
+        for m in methods:
+            if m == best:
+                continue
+            t = paired_t(prices[(S0, m)], prices[(S0, best)])
+            best_rows.append({"S0": S0, "Best": best, "Method": m, "Diff vs best": t["diff"],
+                              "SE": t["se"], "t": t["t"], "p": t["p"]})
+        cf_itm, cf_all = prices[(S0, "LSM")], prices[(S0, "LSM-all")]
+        v_itm, v_all = prices[(S0, "TVR-ITM")], prices[(S0, "TVR")]
+        zero = np.zeros(len(cf_itm))
+        contrasts = {
+            "Target (value - cash flow)": ((v_itm - cf_itm) + (v_all - cf_all)) / 2,
+            "Sample (all - ITM)": ((cf_all - cf_itm) + (v_all - v_itm)) / 2,
+            "Interaction": (v_all - v_itm) - (cf_all - cf_itm),
+        }
+        for name, c in contrasts.items():
+            t = paired_t(c, zero)
+            contrast_rows.append({"S0": S0, "Effect": name, "Estimate": t["diff"], "SE": t["se"],
+                                  "t": t["t"], "p": t["p"]})
+    df_best = pd.DataFrame(best_rows)
+    df_best["p (Holm)"] = holm(df_best["p"].values)
+    df_con = pd.DataFrame(contrast_rows)
+    df_con["p (Holm)"] = holm(df_con["p"].values)
+
+    print("\n2x2 design: summary")
+    print(df_sum.to_string(index=False))
+    print("\nPaired differences against the best method per S0 (Holm over all 9 tests)")
+    print(df_best.to_string(index=False))
+    print("\nFactorial contrasts (Holm over all 9 tests)")
+    print(df_con.to_string(index=False))
+
+    fmt = {"Mean": "{:.4f}", "SE": "{:.4f}", "CI low": "{:.4f}", "CI high": "{:.4f}",
+           "Reference": "{:.2f}", "Bias": "{:+.4f}", "RMSE": "{:.4f}", "S0": "{:.0f}",
+           "Diff vs best": "{:+.4f}", "t": "{:.2f}", "p": fmt_p, "p (Holm)": fmt_p,
+           "Estimate": "{:+.4f}"}
+    text = (f"# 2x2 design: regression target x regression sample (Glasserman benchmark)\n\n"
+            f"R = {R} replications per S0, N = {n_paths:,} training and {n_paths:,} independent "
+            f"pricing paths. In each replication all four methods use the same training and "
+            f"pricing paths, and the same normals are used for all S0 (common random numbers, "
+            f"seed {seed}). Basis: degree {DEFAULT_DEGREE}, scaled by K = {DEFAULT_SCALE}. "
+            f"SE = standard error over replications; bias and RMSE against the Glasserman "
+            f"reference. Generated by `theory_engine.py`.\n\n"
+            + df_to_markdown(df_sum, fmt)
+            + "\n\nPaired differences against the method with the highest mean at each S0 "
+              "(all four estimators are low-biased, so a negative difference means a worse "
+              "policy). Holm correction over all 9 tests:\n\n"
+            + df_to_markdown(df_best, fmt)
+            + "\n\nFactorial contrasts per S0 (paired over replications). Holm correction over "
+              "all 9 tests:\n\n"
+            + df_to_markdown(df_con, fmt) + "\n")
+    if confirm is not None:
+        cm = confirm["means"].rename(columns={"mean": "Mean", "se": "SE", "bias": "Bias"})
+        text += (f"\nConfirmation run at S0 = {confirm['S0']:g}: R = {confirm['R']} replications, "
+                 f"independent seed {confirm['seed']}, same design. Four pre-specified paired "
+                 f"tests, Holm correction over the four:\n\n"
+                 + df_to_markdown(cm, fmt) + "\n\n"
+                 + df_to_markdown(confirm["table"], fmt) + "\n")
+    write_result("benchmark_2x2", text)
+    df_sum.to_csv("output_tables/benchmark_2x2.csv", index=False)
+    return dict(summary=df_sum, vs_best=df_best, contrasts=df_con)
+
+
+def confirm_2x2_large_R(S0: float = 100.0, R: int = 200, n_paths: int = 4000,
+                       seed: int = 2027) -> dict:
+    """
+    Confirmation run of the 2x2 design at one S0 with more replications and an independent
+    seed (CRN within each replication). Four pre-specified paired tests, Holm-corrected:
+    TVR - LSM, target effect, sample effect, interaction (definitions as in analyze_2x2).
+    """
+    methods = tuple(METHOD_LABEL)
+    pr = run_benchmark_replications(methods, (S0,), R=R, n_paths=n_paths, seed=seed)
+    cf_itm, cf_all = pr[(S0, "LSM")], pr[(S0, "LSM-all")]
+    v_itm, v_all = pr[(S0, "TVR-ITM")], pr[(S0, "TVR")]
+    zero = np.zeros(R)
+    tests = {
+        "TVR - classic LSM": paired_t(v_all, cf_itm),
+        "Target (value - cash flow)": paired_t(((v_itm - cf_itm) + (v_all - cf_all)) / 2, zero),
+        "Sample (all - ITM)": paired_t(((cf_all - cf_itm) + (v_all - v_itm)) / 2, zero),
+        "Interaction": paired_t((v_all - v_itm) - (cf_all - cf_itm), zero),
+    }
+    p_holm = holm([t["p"] for t in tests.values()])
+    rows = [{"Contrast": k, "Estimate": t["diff"], "SE": t["se"], "t": t["t"], "p": t["p"],
+             "p (Holm)": ph, "95% CI": f"[{t['ci_low']:.4f}, {t['ci_high']:.4f}]"}
+            for (k, t), ph in zip(tests.items(), p_holm)]
+    df = pd.DataFrame(rows)
+    means = pd.DataFrame([{"Method": m, **{k: v for k, v in summarize(pr[(S0, m)], REFERENCE[S0]).items()
+                                            if k in ("mean", "se", "bias")}} for m in methods])
+    print(f"\nConfirmation run (S0 = {S0}, R = {R}, seed {seed})")
+    print(means.to_string(index=False))
+    print(df.to_string(index=False))
+    return dict(prices=pr, tests=tests, table=df, means=means, S0=S0, R=R, seed=seed)
 
 # ==============================================================================
 # ANALYSIS & PLOTTING FUNCTIONS
@@ -211,6 +331,19 @@ def analyze_moneyness_sensitivity(T: float, r: float, delta: float, sigma: float
         
     df_results = pd.DataFrame(results)
     print(df_results.to_string(index=False))
+    text = ("# Glasserman Example 8.6.1: single run per S0 (TVR policy)\n\n"
+            f"K = {K:g}, T = {T:g}, r = {r}, delta = {delta}, sigma = {sigma}, rho = 0, "
+            f"{m_steps} exercise dates, N = {n_paths:,} training and {n_paths:,} independent "
+            f"pricing paths, generator default_rng([{seed}, S0]), basis degree {DEFAULT_DEGREE} "
+            f"scaled by K. Std. error = pricing-path standard error conditional on the trained "
+            f"policy. For 50 replications per S0 and all four methods see "
+            f"[benchmark_2x2.md](benchmark_2x2.md). Generated by `theory_engine.py`.\n\n"
+            + df_to_markdown(df_results.rename(columns={
+                "LSM_Price": "Price", "Std_Error": "Std. error", "Exact_Price": "Reference",
+                "Difference": "Difference", "Diff_over_SE": "Difference / SE"}),
+                {"S0": "{:.0f}", "Price": "{:.3f}", "Std. error": "{:.3f}", "Reference": "{:.2f}",
+                 "Difference": "{:+.3f}", "Difference / SE": "{:+.2f}"}))
+    write_result("glasserman_replication", text)
     return df_results
 
 def analyze_convergence(S0: float, K: float, T: float, r: float, delta: float, sigma: float, 
@@ -344,110 +477,65 @@ def analyze_volatility_sensitivity(S0: float, K: float, T: float, r: float,
     df_results = pd.DataFrame(results)
     return df_results
 
-def compare_lsm_tvr_theory(S0: float, K: float, T: float, r: float, delta: float, sigma: float, 
-                           m_steps: int, n_paths: int, num_runs: int = 50,
-                           seed: int = 2026):
+def compare_lsm_tvr_theory(lsm_prices: np.ndarray, tvr_prices: np.ndarray,
+                           S0: float = 100.0, n_paths: int = 4000, seed: int = 2026,
+                           supplementary: dict | None = None) -> pd.DataFrame:
     """
-    Empirically compares the variance of Classic LSM and TVR
-    under theoretical laboratory conditions across multiple independent runs.
-    Now includes 95% Confidence Intervals!
-
-    A single generator np.random.default_rng(seed) is created here and passed
-    explicitly to every simulation call, so the whole sequence of runs is
-    reproducible without touching global NumPy state.
+    Variance and mean comparison of classic LSM and TVR at one S0, on the replicated
+    benchmark prices (both methods on the same paths in each replication, so the samples are
+    paired). Reports mean, variance and 95% CI per method, the F-test (assumes independence)
+    and the Pitman-Morgan test (paired) for equal variances, and the paired t-test for the
+    mean difference TVR - LSM. Both prices are low-biased, so a positive mean difference
+    indicates a better TVR policy.
     """
-    print(f"\n--- Running Theory Comparison: Classic LSM vs TVR ({num_runs} Runs) ---")
-    rng = np.random.default_rng(seed)
-
-    lsm_prices = []
-    tvr_prices = []
-    
-    for i in range(num_runs):
-        # Generate new independent paths for each run
-        t1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
-        t2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
-        p1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
-        p2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
-        
-        # Evaluate Classic LSM
-        model_lsm = lsm_train_max(t1, t2, K, r, T, method="LSM")
-        lsm_prices.append(lsm_price_max(model_lsm, p1, p2))
-        
-        # Evaluate TVR Value Iteration
-        model_tvr = lsm_train_max(t1, t2, K, r, T, method="TVR")
-        tvr_prices.append(lsm_price_max(model_tvr, p1, p2))
-        
-        # Print progress to keep track during longer runs
-        if (i + 1) % 10 == 0:
-            print(f"Completed {i + 1}/{num_runs} independent runs...")
-            
-    # --- Print Run-by-Run Table (Optional visual check) ---
-    df_runs = pd.DataFrame({
-        "Run": range(1, num_runs + 1),
-        "Classic_LSM": lsm_prices,
-        "TVR_Value_Iteration": tvr_prices
-    })
-    # Uncomment the next line if you want to see all 50 runs in the console
-    # print(df_runs.to_string(index=False))
-
-    # --- Statistical Evaluation (Confidence Intervals) ---
-    def compute_stats(prices):
-        prices = np.array(prices)
-        mean_val = np.mean(prices)
-        var_val = np.var(prices, ddof=1)
-        se = stats.sem(prices) # Standard Error of the Mean
-        
-        # Calculate 95% Confidence Interval using the t-distribution
-        ci_low, ci_high = stats.t.interval(0.95, len(prices)-1, loc=mean_val, scale=se)
-        return mean_val, var_val, ci_low, ci_high
-
-    lsm_mean, lsm_var, lsm_low, lsm_high = compute_stats(lsm_prices)
-    tvr_mean, tvr_var, tvr_low, tvr_high = compute_stats(tvr_prices)
-    
-    # Compile summary results into a DataFrame for export
-    df_summary = pd.DataFrame({
-        "Method": ["Classic LSM", "TVR Value Iteration"],
-        "Mean_Price": [lsm_mean, tvr_mean],
-        "Variance": [lsm_var, tvr_var],
-        "CI_95_Lower": [lsm_low, tvr_low],
-        "CI_95_Upper": [lsm_high, tvr_high]
-    })
-    
-    print("\nTheoretical Statistics (Glasserman Benchmark):")
+    print(f"\n--- Classic LSM vs TVR at S0 = {S0} ({len(lsm_prices)} replications) ---")
+    x, y = np.asarray(lsm_prices), np.asarray(tvr_prices)
+    num_runs = len(x)
+    rows = []
+    for name, v in (("Classic LSM", x), ("TVR", y)):
+        st = summarize(v, REFERENCE[S0])
+        rows.append({"Method": name, "Mean": st["mean"], "SE": st["se"], "Variance": st["var"],
+                     "CI 95% low": st["ci_low"], "CI 95% high": st["ci_high"]})
+    df_summary = pd.DataFrame(rows)
     print(df_summary.to_string(index=False))
 
-    # --- Test for equal variances ---
-    # Two-sided F-test. It assumes independent samples; here LSM and TVR are
-    # priced on the same paths in each run, so the Pitman-Morgan test for
-    # paired samples (correlation of X+Y with X-Y) is reported as well.
-    x, y = np.array(lsm_prices), np.array(tvr_prices)
-    f_stat = lsm_var / tvr_var
+    f_stat = np.var(x, ddof=1) / np.var(y, ddof=1)
     df1 = df2 = num_runs - 1
     f_p = 2 * min(stats.f.cdf(f_stat, df1, df2), stats.f.sf(f_stat, df1, df2))
-    pm_r, pm_p = stats.pearsonr(x + y, x - y)
-    pair_corr = np.corrcoef(x, y)[0, 1]
-    print(f"\nF-test (H0: equal variances): F = {f_stat:.4f}, "
-          f"df = ({df1}, {df2}), two-sided p = {f_p:.4f}")
-    print(f"Correlation of LSM and TVR prices across runs: {pair_corr:.4f}")
-    print(f"Pitman-Morgan test (paired): r = {pm_r:.4f}, p = {pm_p:.4f}")
+    pm = pitman_morgan(x, y)
+    pair_corr = float(np.corrcoef(x, y)[0, 1])
+    t = paired_t(y, x)
+    print(f"F-test: F = {f_stat:.4f}, p = {f_p:.4f}; correlation {pair_corr:.4f}; "
+          f"Pitman-Morgan r = {pm['r']:.4f}, p = {pm['p']:.4f}")
+    print(f"Paired t-test TVR - LSM: {t['diff']:.4f} (SE {t['se']:.4f}, t = {t['t']:.4f}, "
+          f"p = {t['p']:.4g}, 95% CI [{t['ci_low']:.4f}, {t['ci_high']:.4f}])")
 
-    # --- Paired t-test for the mean difference TVR - LSM ---
-    # Both prices are low-biased estimates on the same pricing paths, so a
-    # positive mean difference indicates a better exercise policy for TVR.
-    d = y - x
-    d_mean = float(np.mean(d))
-    d_se = float(stats.sem(d))
-    t_res = stats.ttest_rel(y, x)
-    d_low, d_high = stats.t.interval(0.95, num_runs - 1, loc=d_mean, scale=d_se)
-    print(f"\nPaired t-test (H0: E[TVR - LSM] = 0): mean diff = {d_mean:.4f}, "
-          f"SE = {d_se:.4f}, t = {t_res.statistic:.4f}, df = {num_runs - 1}, "
-          f"two-sided p = {t_res.pvalue:.4g}, 95% CI = [{d_low:.4f}, {d_high:.4f}]")
-
-    # Export only the summary table to LaTeX
-    df_summary.to_latex("output_tables/table_theory_comparison.tex", index=False, float_format="%.4f")
-    df_runs.to_csv("output_tables/theory_comparison_runs.csv", index=False)
+    fmt = {"Mean": "{:.4f}", "SE": "{:.4f}", "Variance": "{:.4f}", "CI 95% low": "{:.4f}",
+           "CI 95% high": "{:.4f}"}
+    text = (f"# Classic LSM vs TVR (S0 = {S0:g}, {num_runs} replications)\n\n"
+            f"Same replications as the 2x2 design ([benchmark_2x2.md](benchmark_2x2.md)): "
+            f"N = {n_paths:,} training and pricing paths, both methods on the same paths in each "
+            f"replication (seed {seed}). Generated by `theory_engine.py`.\n\n"
+            + df_to_markdown(df_summary, fmt)
+            + "\n\nTests for equal variances (H0: Var(LSM) = Var(TVR)):\n\n"
+            + "| Test | Statistic | p-value |\n|---|---:|---:|\n"
+            + f"| F-test, two-sided, df = ({df1}, {df2}) | F = {f_stat:.4f} | {f_p:.4f} |\n"
+            + f"| Pitman-Morgan (paired samples) | r = {pm['r']:.4f} | {pm['p']:.4f} |\n\n"
+            + f"Correlation of LSM and TVR prices across replications: {pair_corr:.4f}. The "
+              f"F-test assumes independent samples; Pitman-Morgan accounts for the pairing.\n\n"
+            + f"Paired t-test for the mean difference (H0: E[TVR - LSM] = 0), df = {num_runs - 1}:"
+              f"\n\n| Mean difference TVR - LSM | SE | t | p-value | 95% CI |\n"
+              f"|---:|---:|---:|---:|---|\n"
+              f"| {t['diff']:+.4f} | {t['se']:.4f} | {t['t']:.4f} | {fmt_p(t['p'])} | "
+              f"[{t['ci_low']:.4f}, {t['ci_high']:.4f}] |\n")
+    if supplementary is not None:
+        ts = supplementary["test"]
+        text += (f"\nSupplementary confirmation run (S0 = {supplementary['S0']:g}, "
+                 f"R = {supplementary['R']}, independent seed {supplementary['seed']}, same "
+                 f"design): TVR - LSM = {ts['diff']:+.4f} (SE {ts['se']:.4f}, t = {ts['t']:.2f}, "
+                 f"p = {fmt_p(ts['p'])}, 95% CI [{ts['ci_low']:.4f}, {ts['ci_high']:.4f}]).\n")
+    write_result("lsm_vs_tvr", text)
     df_summary.to_csv("output_tables/theory_comparison_summary.csv", index=False)
-
     return df_summary
 
 # ==============================================================================
@@ -473,17 +561,17 @@ if __name__ == "__main__":
     # 2.1 Basis ablation (degree x scaling, LSM and TVR)
     run_basis_ablation(S0=S0_base, R=50, n_paths=n_paths)
 
-    # 2.2 Replicated benchmark at S0 = 90/100/110 with the default basis
-    methods = ("LSM", "TVR")
+    # 3.0 Replicated benchmark at S0 = 90/100/110: 2x2 design (target x sample)
+    methods = tuple(METHOD_LABEL)
     bench = run_benchmark_replications(methods, R=50, n_paths=n_paths)
-    df_bench = summarize_benchmark(bench, methods)
-    print(f"\nReplicated benchmark (R = 50, basis degree {DEFAULT_DEGREE}, scaled = {DEFAULT_SCALE}):")
-    print(df_bench.to_string(index=False))
+    confirm = confirm_2x2_large_R(S0=S0_base, R=200, n_paths=n_paths)
+    analyze_2x2(bench, R=50, n_paths=n_paths, confirm=confirm)
 
-    # 3.0 Run theoretical comparison of Classic LSM vs TVR (Increased to 50 runs for statistical significance!)
-    compare_lsm_tvr_theory(
-        S0_base, K_val, T_val, r_val, delta_val, sigma_val, m_steps, n_paths, num_runs=50
-    )
+    # 3.0b Classic LSM vs TVR at S0 = 100 on the same replications (variance tests, paired t)
+    supp = dict(test=confirm["tests"]["TVR - classic LSM"], S0=confirm["S0"], R=confirm["R"],
+                seed=confirm["seed"])
+    compare_lsm_tvr_theory(bench[(S0_base, "LSM")], bench[(S0_base, "TVR")],
+                           S0=S0_base, n_paths=n_paths, supplementary=supp)
 
     # 3.1 Run sensitivity analysis (Moneyness) and export to LaTeX
     print("\nStarting Moneyness Sensitivity Analysis (Table 1)...")

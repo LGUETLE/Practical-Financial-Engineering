@@ -115,6 +115,15 @@ def continuation_value(model: dict, i: int, S1: np.ndarray, S2: np.ndarray) -> n
 #  3. LSM / TVR ALGORITHM (Backward & Forward)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# 2x2 design: regression target x regression sample.
+METHODS: dict[str, tuple[str, str]] = {
+    "LSM":     ("cashflow", "itm"),   # classic Longstaff-Schwartz
+    "LSM-all": ("cashflow", "all"),
+    "TVR-ITM": ("value", "itm"),
+    "TVR":     ("value", "all"),      # Tsitsiklis-Van Roy
+}
+
+
 def lsm_train_max(train1: np.ndarray, train2: np.ndarray,
                   K: float, r: float, T: float, method: str = "TVR",
                   degree: int = DEFAULT_DEGREE, scale: bool = DEFAULT_SCALE,
@@ -123,17 +132,31 @@ def lsm_train_max(train1: np.ndarray, train2: np.ndarray,
     Backward induction on training paths: estimates regression coefficients beta_i of the
     continuation value at the exercise dates i = 1, ..., m-1 (date m is maturity).
 
-    Methods:
-      "LSM"  classic Longstaff-Schwartz: regress the realized discounted cash flow of the
-             current policy on the basis, in-the-money paths only; propagated values are
-             realized cash flows (regression error affects only the exercise decision).
-      "TVR"  Tsitsiklis-Van Roy: regress on all paths with target max(h_{i+1}, C_hat_{i+1})
-             (regression-based value iteration); fitted values are propagated.
+    Model: Bermudan call on max(S1, S2) with payoff h = max(max(S1, S2) - K, 0); paths are
+    simulated under the risk-neutral measure, discounting at rate r.
 
-    The coefficients define an exercise policy; the price is obtained out of sample with
-    lsm_price_max (low-biased). With diagnostics=True the model also contains the 2-norm
-    condition number of the regression matrix at each date ("cond").
+    The method is one cell of a 2x2 design (see METHODS):
+      target  "cashflow": regression target is the realized discounted cash flow Y of the
+                          policy estimated at later dates; after the exercise decision the
+                          path keeps h_i (exercise) or Y (continue). Regression errors affect
+                          only the decisions.
+              "value":    regression target is the discounted value estimate
+                          V_{i+1} = max(h_{i+1}, C_hat_{i+1}) (regression-based value
+                          iteration); fitted values are propagated, so errors can accumulate.
+      sample  "itm":      fit on in-the-money paths (h_i > 0) only.
+              "all":      fit on all paths.
+    "LSM" = (cashflow, itm) is classic Longstaff-Schwartz, "TVR" = (value, all) is
+    Tsitsiklis-Van Roy. For (value, itm) the continuation value of out-of-the-money paths is
+    the fitted function evaluated outside the region it was fitted on (extrapolation).
+
+    Estimator: the coefficients define an exercise policy; the price is obtained out of sample
+    with lsm_price_max on independent paths and is therefore low-biased for every method.
+    With diagnostics=True the model also contains the 2-norm condition number of the
+    regression matrix at each date ("cond").
     """
+    if method not in METHODS:
+        raise ValueError(f"unknown method {method!r}; choose from {list(METHODS)}")
+    target, sample = METHODS[method]
     m = train1.shape[1] - 1
     dt = T / m
     df_step = np.exp(-r * dt)
@@ -144,43 +167,29 @@ def lsm_train_max(train1: np.ndarray, train2: np.ndarray,
     cond = {}
 
     for i in range(m - 1, 0, -1):
-        Y = V * df_step  # Discounted future values
+        Y = V * df_step  # discounted value / cash flow from date i+1
         
         S1_i = train1[:, i]
         S2_i = train2[:, i]
         h_i = np.maximum(np.maximum(S1_i, S2_i) - K, 0.0)
-        
         Phi = basis_max(S1_i, S2_i, K, degree, scale)
-        
-        if method == "LSM":
-            # 1. Classic LSM: Regress only over In-The-Money paths
-            itm = h_i > 0
-            if np.sum(itm) > 0:
-                beta = lstsq(Phi[itm], Y[itm])[0]
-                if diagnostics:
-                    cond[i] = float(np.linalg.cond(Phi[itm]))
-            else:
-                beta = np.zeros(Phi.shape[1])
-            betas[i] = beta
 
-            # 2. Cashflow Tracking: Track exact stopping time
-            C_hat = np.zeros_like(h_i)
-            C_hat[itm] = np.maximum(Phi[itm] @ beta, 0.0)
-            exercise = h_i > C_hat
-            V = np.where(exercise, h_i, Y) 
-            
-        elif method == "TVR":
-            # 1. TVR: Regress over ALL paths
-            beta = lstsq(Phi, Y)[0]
-            betas[i] = beta
+        rows = h_i > 0 if sample == "itm" else np.ones(len(h_i), dtype=bool)
+        if np.any(rows):
+            beta = lstsq(Phi[rows], Y[rows])[0]
             if diagnostics:
-                cond[i] = float(np.linalg.cond(Phi))
-            
-            # 2. Value Iteration: Smooth the target variable
-            C_hat = np.maximum(Phi @ beta, 0.0)
-            V = np.maximum(h_i, C_hat)
+                cond[i] = float(np.linalg.cond(Phi[rows]))
         else:
-            raise ValueError(f"unknown method {method!r}")
+            beta = np.zeros(Phi.shape[1])
+        betas[i] = beta
+
+        C_hat = np.maximum(Phi @ beta, 0.0)
+        if target == "cashflow":
+            # Exercise only if h_i > C_hat (never when out of the money, h_i = 0)
+            V = np.where(h_i > C_hat, h_i, Y)
+        else:
+            # Value iteration: propagate the fitted value
+            V = np.maximum(h_i, C_hat)
 
     model = dict(betas=betas, K=K, r=r, T=T, m=m, method=method,
                  degree=degree, scale=scale)

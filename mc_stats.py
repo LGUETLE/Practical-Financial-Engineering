@@ -76,6 +76,13 @@ def holm(pvalues: list[float] | np.ndarray) -> np.ndarray:
     return adj
 
 
+def fmt_p(p: float) -> str:
+    """Format a p-value: 4 decimals, or scientific notation below 1e-4."""
+    if p is None or np.isnan(p):
+        return "–"
+    return f"{p:.4f}" if p >= 1e-4 else f"{p:.1e}"
+
+
 def df_to_markdown(df: pd.DataFrame, floatfmt: dict | str = "{:.4f}") -> str:
     """Render a DataFrame as a GitHub Markdown table (numbers right-aligned)."""
     cols = list(df.columns)
@@ -84,7 +91,7 @@ def df_to_markdown(df: pd.DataFrame, floatfmt: dict | str = "{:.4f}") -> str:
             if np.isnan(v):
                 return "–"
             f = floatfmt.get(col, "{:.4f}") if isinstance(floatfmt, dict) else floatfmt
-            return f.format(v)
+            return f(v) if callable(f) else f.format(v)
         return str(v)
     numeric = [pd.api.types.is_numeric_dtype(df[c]) for c in cols]
     lines = ["| " + " | ".join(cols) + " |",

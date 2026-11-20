@@ -30,6 +30,8 @@ code. Since then I have revised and extended it individually:
   so the earlier significant result (p = 0.0008) did not replicate (see the 2x2 comparison below).
 - Regression basis: degree 2 or complete degree 3 (+ intrinsic value), evaluated on S/K. A basis
   ablation chose degree 2 scaled by K as default.
+- 2x2 design separating the regression target (realized cash flow vs value iteration) from the
+  regression sample (ITM vs all paths), with paired tests and Holm correction.
 
 ## Model and methods
 
@@ -86,53 +88,52 @@ the exercise policy learned in the backward pass; a higher mean price indicates 
 All numbers below come from one run of `theory_engine.py` (Python 3.13, package versions as in
 `requirements.txt`). The tables are also in [`results/`](results/).
 
-### Replication of Glasserman Example 8.6.1 (TVR policy)
+### Glasserman benchmark: 2x2 design (target x sample), 50 replications per S0
 
-N = 4,000 training paths and 4,000 independent pricing paths per S_0. The standard error is that
-of the pricing paths, conditional on the trained policy.
+Four regression methods: target {realized cash flow, value iteration} x sample {ITM paths,
+all paths}; classic LSM = (cash flow, ITM), TVR = (value, all). R = 50 replications per S0,
+N = 4,000 training and 4,000 pricing paths; in each replication all methods use the same paths
+(common random numbers). Full tables: [`results/benchmark_2x2.md`](results/benchmark_2x2.md).
 
-| S0 | Price | Std. error | Reference | Difference | Difference / SE |
+| S0 | Reference | Classic LSM | Cash flow, all | Value, ITM | TVR |
 |---:|---:|---:|---:|---:|---:|
-| 90 | 7.990 | 0.193 | 8.08 | -0.090 | -0.47 |
-| 100 | 13.760 | 0.242 | 13.90 | -0.140 | -0.58 |
-| 110 | 21.552 | 0.286 | 21.34 | +0.212 | +0.74 |
+| 90 | 8.08 | 8.0059 (0.0285) | 8.0242 (0.0274) | 8.0148 (0.0272) | 8.0201 (0.0289) |
+| 100 | 13.90 | 13.8442 (0.0322) | 13.8729 (0.0321) | 13.8619 (0.0324) | 13.8684 (0.0331) |
+| 110 | 21.34 | 21.2448 (0.0381) | 21.2542 (0.0381) | 21.2449 (0.0349) | 21.2464 (0.0374) |
 
-All three prices lie within one standard error of the reference values, so they are consistent
-with them. Single runs with standard errors of 0.19–0.29 cannot resolve a low bias of order 0.1;
-the S_0 = 110 estimate above the reference is within the Monte Carlo noise.
+Mean (SE over replications). All twelve means lie below the reference, as expected for low-biased
+estimators. (Cash flow, all paths) has the highest mean at every S0; after a Holm correction over
+the nine comparisons with it, only classic LSM at S0 = 100 is significantly worse (−0.029,
+adjusted p = 0.006).
 
-### Classic LSM vs TVR (S0 = 100, 50 replications)
+Confirmation run at S0 = 100 with R = 200 and an independent seed (four pre-specified paired
+tests, Holm-corrected):
 
-Each replication uses new training and pricing paths (N = 4,000 each); LSM and TVR are evaluated on
-the same paths.
+| Contrast | Estimate | SE | Holm p |
+|---|---:|---:|---:|
+| TVR − classic LSM | +0.0226 | 0.0052 | 6.7e-05 |
+| Target (value − cash flow) | −0.0003 | 0.0041 | 0.94 |
+| Sample (all − ITM) | +0.0229 | 0.0034 | 1.1e-09 |
+| Interaction | +0.0049 | 0.0052 | 0.69 |
 
-| Method | Mean price | Variance | 95% CI lower | 95% CI upper |
-|---|---:|---:|---:|---:|
-| Classic LSM | 13.7766 | 0.0555 | 13.7097 | 13.8436 |
-| TVR | 13.8060 | 0.0505 | 13.7422 | 13.8699 |
+**The regression sample, not the regression target, drives the difference between LSM and TVR.**
+Fitting on all paths instead of ITM paths only raises the price by about 0.023 (a better policy);
+regressing on value-iteration targets instead of realized cash flows makes no detectable
+difference. TVR − LSM equals the sum of the two main effects, so it is almost entirely the sample
+effect. The effect is small (about 0.02 on 13.8, i.e. 0.15%).
 
-| Test (H0: equal variances) | Statistic | p-value |
-|---|---:|---:|
-| F-test, two-sided, df = (49, 49) | F = 1.0991 | 0.7421 |
-| Pitman–Morgan (paired samples) | r = 0.1879 | 0.1914 |
+### Classic LSM vs TVR (S0 = 100): variance tests
 
-| Paired t-test (H0: E[TVR − LSM] = 0), df = 49 | Mean difference | Std. error | t | p-value | 95% CI |
-|---|---:|---:|---:|---:|---|
-| TVR − LSM | 0.0294 | 0.0082 | 3.5594 | 0.0008 | [0.0128, 0.0459] |
+On the 50 replications above ([`results/lsm_vs_tvr.md`](results/lsm_vs_tvr.md)): variances
+0.0517 (LSM) and 0.0549 (TVR), F-test p = 0.83, Pitman–Morgan (paired) p = 0.47, so no evidence of
+a variance difference. Paired mean difference TVR − LSM = +0.0243 (SE 0.0094, p = 0.013).
+The stage-1 run (old random stream) gave +0.0294 (p = 0.0008); the first run on the new stream
+in this revision gave −0.0039 (p = 0.69). With R = 200 the difference is +0.0226 (SE 0.0052), so
+the stage-1 direction holds, but single 50-run experiments of this size can miss it.
 
-- **Variance.** The variance difference between LSM and TVR is not statistically significant
-  (F-test p = 0.74). Because both methods are priced on the same paths, their prices are strongly
-  correlated across replications (correlation 0.969), which violates the independence assumption of
-  the F-test; the Pitman–Morgan test for paired samples does not reject equal variances either
-  (p = 0.19).
-- **Bias.** Both 95% confidence intervals lie entirely below the reference value 13.90 (by about
-  0.12 for LSM and 0.09 for TVR in the mean). This is consistent with the expected low bias of a
-  price computed with an estimated, suboptimal exercise policy.
-- **LSM vs TVR mean.** The separate confidence intervals overlap, but they ignore the pairing.
-  The paired t-test removes the common path noise and shows that the mean difference TVR − LSM is
-  significant (p = 0.0008, 95% CI [0.0128, 0.0459]). Since both are low-biased estimates on the
-  same pricing paths, TVR learns a better exercise policy than LSM in this setting (S_0 = 100,
-  N = 4,000, 7-term basis). The gain is small: about 0.03 on a price of about 13.8.
+Single run per S0 (TVR, N = 4,000): see
+[`results/glasserman_replication.md`](results/glasserman_replication.md); deviations from the
+reference of up to 1.3 standard errors are Monte Carlo noise.
 
 ### Estimated exercise region
 
