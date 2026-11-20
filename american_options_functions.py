@@ -6,33 +6,36 @@ from scipy.linalg import lstsq, cholesky
 # ─────────────────────────────────────────────────────────────────────────────
 
 def simulate_gbm(S0: float, sigma: float, r: float, delta: float,
-                 T: float, m: int, n_paths: int, seed: int = None) -> np.ndarray:
+                 T: float, m: int, n_paths: int,
+                 rng: np.random.Generator) -> np.ndarray:
     """
-    Simulates independent paths of a Geometric Brownian Motion (GBM).
+    Simulates paths of a geometric Brownian motion under the risk-neutral measure,
+    dS = (r - delta) S dt + sigma S dW, exactly on the grid t_i = i T / m.
     Used for the theoretical Glasserman benchmark.
-    """
-    if seed is not None:
-        np.random.seed(seed)
 
+    All randomness comes from the explicitly passed generator `rng`
+    (np.random.default_rng(seed)); no global NumPy state is used.
+    Returns an array of shape (n_paths, m + 1) whose first column is S0.
+    """
     dt = T / m
     drift = (r - delta - 0.5 * sigma**2) * dt
     vol = sigma * np.sqrt(dt)
 
-    Z = np.random.standard_normal((n_paths, m))
+    Z = rng.standard_normal((n_paths, m))
     log_S = np.log(S0) + np.cumsum(drift + vol * Z, axis=1)
     
     return np.hstack([np.full((n_paths, 1), S0), np.exp(log_S)])
 
 def simulate_correlated_gbm(S0_1: float, S0_2: float, mu_1: float, mu_2: float, 
                             sigma_1: float, sigma_2: float, rho: float,
-                            T: float, m: int, n_paths: int, seed: int = None) -> tuple:
+                            T: float, m: int, n_paths: int,
+                            rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
     """
     Simulates two correlated GBMs using Cholesky decomposition.
     Used for historical market data.
-    """
-    if seed is not None:
-        np.random.seed(seed)
 
+    All randomness comes from the explicitly passed generator `rng`.
+    """
     dt = T / m
     # Covariance matrix for Cholesky decomposition
     cov_matrix = np.array([[1.0, rho], 
@@ -40,7 +43,7 @@ def simulate_correlated_gbm(S0_1: float, S0_2: float, mu_1: float, mu_2: float,
     L = cholesky(cov_matrix, lower=True)
 
     # Generate independent shocks and apply correlation
-    Z_uncorr = np.random.standard_normal((2, n_paths, m))
+    Z_uncorr = rng.standard_normal((2, n_paths, m))
     
     paths_1 = np.zeros((n_paths, m + 1))
     paths_2 = np.zeros((n_paths, m + 1))

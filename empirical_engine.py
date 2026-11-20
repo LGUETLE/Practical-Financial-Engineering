@@ -20,7 +20,8 @@ def run_empirical_macro_replications(S0_1: float, S0_2: float,
                                      sigma_1: float, sigma_2: float, rho: float, 
                                      K: float, r: float, T: float, m_steps: int, 
                                      n_paths: int = 10000, R_runs: int = 50,
-                                     scenario_name: str = "tech"):
+                                     scenario_name: str = "tech",
+                                     seed: int = 2026) -> pd.DataFrame:
     """
     Executes macro-replications on correlated, historical market data and 
     calculates 95% confidence intervals to compare Classic LSM and TVR.
@@ -30,6 +31,7 @@ def run_empirical_macro_replications(S0_1: float, S0_2: float,
     
     results_lsm = []
     results_tvr = []
+    rng = np.random.default_rng(seed)
     
     # Risk-neutral measure dynamics (r is used as the drift for pricing)
     drift_1_rn = r
@@ -37,9 +39,9 @@ def run_empirical_macro_replications(S0_1: float, S0_2: float,
 
     for run in range(R_runs):
         t1, t2 = simulate_correlated_gbm(S0_1, S0_2, drift_1_rn, drift_2_rn, 
-                                         sigma_1, sigma_2, rho, T, m_steps, n_paths)
+                                         sigma_1, sigma_2, rho, T, m_steps, n_paths, rng)
         p1, p2 = simulate_correlated_gbm(S0_1, S0_2, drift_1_rn, drift_2_rn, 
-                                         sigma_1, sigma_2, rho, T, m_steps, n_paths)
+                                         sigma_1, sigma_2, rho, T, m_steps, n_paths, rng)
         
         # Classic LSM
         model_lsm = lsm_train_max(t1, t2, K, r, T, method="LSM")
@@ -79,7 +81,7 @@ def run_empirical_macro_replications(S0_1: float, S0_2: float,
     # --- Generate and Export Boxplot ---
     os.makedirs("output_plots", exist_ok=True)
     plt.figure(figsize=(6, 4.5))
-    plt.boxplot([results_lsm, results_tvr], labels=['Classic LSM', 'TVR Value Iteration'])
+    plt.boxplot([results_lsm, results_tvr], tick_labels=['Classic LSM', 'TVR Value Iteration'])
     plt.title(f"Empirical Price Distribution: {scenario_name.upper()} Scenario")
     plt.ylabel("Calculated Option Price ($V_0$)")
     plt.grid(axis='y', linestyle='--', alpha=0.5)
@@ -97,7 +99,9 @@ def run_empirical_macro_replications(S0_1: float, S0_2: float,
 # SENSITIVITY PLOT (2D MAX OPTION)
 # ==============================================================================
 
-def plot_2d_sigma_sensitivity(K, r, T, m_steps, n_paths, tech_vola, crypto_vola, sigmas=None):
+def plot_2d_sigma_sensitivity(K: float, r: float, T: float, m_steps: int, n_paths: int,
+                              tech_vola: float, crypto_vola: float,
+                              sigmas: list | None = None, seed: int = 2026) -> None:
     """
     2D Max-Option Sensitivity Analysis: Classic LSM vs TVR.
     Dynamically visualizes the empirical volatility regimes (Tech vs. Crypto) fetched earlier.
@@ -116,9 +120,10 @@ def plot_2d_sigma_sensitivity(K, r, T, m_steps, n_paths, tech_vola, crypto_vola,
     S0_norm = 100.0
 
     for sig in sigmas:
+        rng = np.random.default_rng([seed, int(round(sig * 100))])
         # Generate training and pricing paths using your correlated GBM function
-        t1, t2 = simulate_correlated_gbm(S0_norm, S0_norm, r, r, sig, sig, test_rho, T, m_steps, n_paths)
-        p1, p2 = simulate_correlated_gbm(S0_norm, S0_norm, r, r, sig, sig, test_rho, T, m_steps, n_paths)
+        t1, t2 = simulate_correlated_gbm(S0_norm, S0_norm, r, r, sig, sig, test_rho, T, m_steps, n_paths, rng)
+        p1, p2 = simulate_correlated_gbm(S0_norm, S0_norm, r, r, sig, sig, test_rho, T, m_steps, n_paths, rng)
         
         # LSM
         model_lsm = lsm_train_max(t1, t2, K, r, T, method="LSM")

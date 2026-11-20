@@ -15,7 +15,8 @@ from american_options_functions import (
 
 def run_n_convergence_stresstest(S0: float, K: float, T: float, r: float, 
                                  delta: float, sigma: float, m_steps: int, 
-                                 n_grid: list, R_runs: int = 30):
+                                 n_grid: list, R_runs: int = 30,
+                                 seed: int = 2026) -> pd.DataFrame:
     """
     Executes a stress test to demonstrate the numerical instability of Classic LSM 
     at low path counts (N) compared to the smoothed TVR Value Iteration.
@@ -27,16 +28,18 @@ def run_n_convergence_stresstest(S0: float, K: float, T: float, r: float,
     
     for n_paths in n_grid:
         print(f"Testing N = {n_paths} paths...")
+        # One explicitly passed generator per N, seeded by (seed, N)
+        rng = np.random.default_rng([seed, n_paths])
         
         lsm_prices = []
         tvr_prices = []
         
         for run in range(R_runs):
             # 1. Simulate independent paths for each run
-            t1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths)
-            t2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths)
-            p1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths)
-            p2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths)
+            t1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
+            t2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
+            p1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
+            p2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
             
             # 2. Classic LSM Bepreisung
             model_lsm = lsm_train_max(t1, t2, K, r, T, method="LSM")

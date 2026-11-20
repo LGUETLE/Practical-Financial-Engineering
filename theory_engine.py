@@ -17,7 +17,8 @@ from american_options_functions import (
 # ==============================================================================
 
 def analyze_moneyness_sensitivity(T: float, r: float, delta: float, sigma: float, 
-                                  K: float, m_steps: int, n_paths: int):
+                                  K: float, m_steps: int, n_paths: int,
+                                  seed: int = 2026) -> pd.DataFrame:
     """
     Evaluates the algorithm across different initial prices (Moneyness).
     Replicates the structure of Glasserman Table 8.1 and 8.2.
@@ -33,13 +34,16 @@ def analyze_moneyness_sensitivity(T: float, r: float, delta: float, sigma: float
     results = []
     
     for S0 in S0_values:
+        # One generator per S0 (seeded by (seed, S0)), passed explicitly
+        rng = np.random.default_rng([seed, int(S0)])
+
         # Generate training paths
-        train_S1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, seed=100+int(S0))
-        train_S2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, seed=200+int(S0))
+        train_S1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
+        train_S2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
         
         # Generate pricing paths
-        price_S1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, seed=300+int(S0))
-        price_S2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, seed=400+int(S0))
+        price_S1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
+        price_S2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
         
         # Train and price (Explicitly using TVR method)
         model = lsm_train_max(train_S1, train_S2, K, r, T, method="TVR")
@@ -62,7 +66,8 @@ def analyze_moneyness_sensitivity(T: float, r: float, delta: float, sigma: float
     return df_results
 
 def analyze_convergence(S0: float, K: float, T: float, r: float, delta: float, sigma: float, 
-                        m_steps: int, path_counts: list):
+                        m_steps: int, path_counts: list,
+                        seed: int = 2026) -> pd.DataFrame:
     """
     Evaluates empirical convergence and computational time as N grows.
     """
@@ -72,12 +77,13 @@ def analyze_convergence(S0: float, K: float, T: float, r: float, delta: float, s
     
     for n in path_counts:
         start_time = time.time()
+        rng = np.random.default_rng([seed, n])
         
         # Simulation
-        t1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n, seed=42)
-        t2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n, seed=43)
-        p1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n, seed=44)
-        p2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n, seed=45)
+        t1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n, rng)
+        t2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n, rng)
+        p1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n, rng)
+        p2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n, rng)
         
         # Algorithm (Explicitly using TVR method)
         model = lsm_train_max(t1, t2, K, r, T, method="TVR")
@@ -155,7 +161,8 @@ def plot_exercise_boundary(model: dict, step_index: int = 4):
     plt.close()
 
 def analyze_volatility_sensitivity(S0: float, K: float, T: float, r: float, 
-                                   delta: float, m_steps: int, n_paths: int):
+                                   delta: float, m_steps: int, n_paths: int,
+                                   seed: int = 2026) -> pd.DataFrame:
     """
     Evaluates the sensitivity of the Max-Option price to changes in volatility.
     Tests sigma values: 10%, 20% (Baseline), and 30%.
@@ -167,13 +174,15 @@ def analyze_volatility_sensitivity(S0: float, K: float, T: float, r: float,
     results = []
     
     for sig in sigma_values:
+        rng = np.random.default_rng([seed, int(round(sig * 100))])
+
         # Generate training paths with the current sigma
-        train_S1 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, seed=500+int(sig*100))
-        train_S2 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, seed=600+int(sig*100))
+        train_S1 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, rng)
+        train_S2 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, rng)
         
         # Generate pricing paths with the current sigma
-        price_S1 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, seed=700+int(sig*100))
-        price_S2 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, seed=800+int(sig*100))
+        price_S1 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, rng)
+        price_S2 = simulate_gbm(S0, sig, r, delta, T, m_steps, n_paths, rng)
         
         # Train and price (Explicitly using TVR method)
         model = lsm_train_max(train_S1, train_S2, K, r, T, method="TVR")
@@ -196,21 +205,22 @@ def compare_lsm_tvr_theory(S0: float, K: float, T: float, r: float, delta: float
     under theoretical laboratory conditions across multiple independent runs.
     Now includes 95% Confidence Intervals!
 
-    The global NumPy seed is set once at the start so that the whole sequence
-    of runs is reproducible (migration to np.random.default_rng is planned).
+    A single generator np.random.default_rng(seed) is created here and passed
+    explicitly to every simulation call, so the whole sequence of runs is
+    reproducible without touching global NumPy state.
     """
     print(f"\n--- Running Theory Comparison: Classic LSM vs TVR ({num_runs} Runs) ---")
-    np.random.seed(seed)
+    rng = np.random.default_rng(seed)
 
     lsm_prices = []
     tvr_prices = []
     
     for i in range(num_runs):
         # Generate new independent paths for each run
-        t1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths)
-        t2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths)
-        p1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths)
-        p2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths)
+        t1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
+        t2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
+        p1 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
+        p2 = simulate_gbm(S0, sigma, r, delta, T, m_steps, n_paths, rng)
         
         # Evaluate Classic LSM
         model_lsm = lsm_train_max(t1, t2, K, r, T, method="LSM")
@@ -360,8 +370,9 @@ if __name__ == "__main__":
     print("\nGenerating Exercise Boundary Plot...")
     
     # Simulate a high-density path set to ensure a smooth exercise boundary
-    t1_plot = simulate_gbm(S0_base, sigma_val, r_val, delta_val, T_val, m_steps, 20000, seed=1)
-    t2_plot = simulate_gbm(S0_base, sigma_val, r_val, delta_val, T_val, m_steps, 20000, seed=2)
+    rng_plot = np.random.default_rng(1)
+    t1_plot = simulate_gbm(S0_base, sigma_val, r_val, delta_val, T_val, m_steps, 20000, rng_plot)
+    t2_plot = simulate_gbm(S0_base, sigma_val, r_val, delta_val, T_val, m_steps, 20000, rng_plot)
     
     # Train the model specifically for the plot (Explicitly using TVR method)
     plot_model = lsm_train_max(t1_plot, t2_plot, K_val, r_val, T_val, method="TVR")
