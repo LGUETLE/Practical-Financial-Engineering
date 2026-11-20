@@ -12,20 +12,18 @@ Originally developed as a group project (three students) in the Project in Busin
 Institute of Financial Mathematics, University of Ulm, July 2026. I led the project and wrote the
 code. Since then I have revised and extended it individually:
 
-- Removed an archived prototype script from the repository and rewrote `.gitignore`, so that
-  generated data, plots and tables stay out of version control.
+- Standard errors: `lsm_price_max` can return the standard error of the price estimate
+  (`return_se=True`); the Glasserman replication now reports it together with the difference to
+  the reference values.
+- Statistical tests for the LSM vs TVR comparison: F-test and Pitman–Morgan test for the
+  variances, paired t-test for the mean difference.
+- The LSM vs TVR comparison uses a fixed seed, so its results are reproducible.
+- Corrected the description of the regression basis: it is a complete degree-2 polynomial plus
+  the intrinsic value (7 terms), not a degree-3 basis.
 - `empirical_engine.py`: the risk-neutral drift `r` is now passed explicitly to the simulation
   (the historically estimated drift is not used for pricing); added a 2D volatility sensitivity
   plot comparing LSM and TVR.
-- Added `requirements.txt` pinned to the tested package versions.
-- `lsm_price_max` can return the standard error of the price estimate (`return_se=True`).
-- The LSM vs TVR comparison uses a fixed seed, so its results are reproducible.
-- Corrected the docstring of the regression basis: it is a complete degree-2 polynomial plus the
-  intrinsic value (7 terms), not a degree-3 basis.
-- `theory_engine.py` now reports standard errors and the difference to the reference values,
-  tests the LSM/TVR variance difference (F-test and Pitman–Morgan test), and exports the
-  exercise-region plot as PNG.
-- Added this README and the `results/` folder with tables and figures from a documented run.
+- `results/` folder with the tables and figures shown below, generated from a documented run.
 
 ## Model and methods
 
@@ -53,8 +51,8 @@ backwards, so regression errors can accumulate across dates.
 
 **Pricing.** Both methods are priced with the same out-of-sample forward pass: the learned
 coefficients define a stopping rule that is applied to an independent set of pricing paths, and the
-price is the mean of the discounted payoffs at the chosen stopping times. Because any stopping rule
-is at most optimal, both estimators are low-biased (E[V̂] ≤ true price). LSM and TVR differ only in
+price is the mean of the discounted payoffs at the chosen stopping times. Because no stopping rule
+can outperform the optimal one, both estimators are low-biased (E[V̂] ≤ true price). LSM and TVR differ only in
 the exercise policy learned in the backward pass; a higher mean price indicates a better policy.
 
 ## Results
@@ -92,6 +90,10 @@ the same paths.
 | F-test, two-sided, df = (49, 49) | F = 1.0991 | 0.7421 |
 | Pitman–Morgan (paired samples) | r = 0.1879 | 0.1914 |
 
+| Paired t-test (H0: E[TVR − LSM] = 0), df = 49 | Mean difference | Std. error | t | p-value | 95% CI |
+|---|---:|---:|---:|---:|---|
+| TVR − LSM | 0.0294 | 0.0082 | 3.5594 | 0.0008 | [0.0128, 0.0459] |
+
 - **Variance.** The variance difference between LSM and TVR is not statistically significant
   (F-test p = 0.74). Because both methods are priced on the same paths, their prices are strongly
   correlated across replications (correlation 0.969), which violates the independence assumption of
@@ -100,15 +102,17 @@ the same paths.
 - **Bias.** Both 95% confidence intervals lie entirely below the reference value 13.90 (by about
   0.12 for LSM and 0.09 for TVR in the mean). This is consistent with the expected low bias of a
   price computed with an estimated, suboptimal exercise policy.
-- **LSM vs TVR mean.** TVR has the higher mean price, but the confidence intervals overlap
-  substantially and the mean difference has not been tested here, so these results do not show
-  that one policy is better.
+- **LSM vs TVR mean.** The separate confidence intervals overlap, but they ignore the pairing.
+  The paired t-test removes the common path noise and shows that the mean difference TVR − LSM is
+  significant (p = 0.0008, 95% CI [0.0128, 0.0459]). Since both are low-biased estimates on the
+  same pricing paths, TVR learns a better exercise policy than LSM in this setting (S_0 = 100,
+  N = 4,000, 7-term basis). The gain is small: about 0.03 on a price of about 13.8.
 
 ### Estimated exercise region
 
-Exercise region at exercise date i = 4 (t = 4/3), from a TVR model trained on 20,000 paths. Exercise
-is optimal when one asset is well above the strike and clearly above the other; near the diagonal
-S_1 = S_2 it is optimal to continue.
+Estimated exercise region at exercise date i = 4 (t = 4/3), from a TVR model trained on 20,000
+paths. The estimated policy exercises when one asset is well above the strike and clearly above the
+other, and continues near the diagonal S_1 = S_2.
 
 ![Estimated exercise region at step 4](results/exercise_boundary.png)
 

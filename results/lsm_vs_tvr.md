@@ -18,3 +18,13 @@ Test for equal variances (H0: Var(LSM) = Var(TVR)):
 The LSM and TVR prices are strongly correlated across replications (correlation 0.9690) because
 both are computed on the same paths; the F-test assumes independent samples, the Pitman-Morgan
 test accounts for the pairing. Neither rejects equal variances at the 5% level.
+
+Paired t-test for the mean difference (H0: E[TVR − LSM] = 0), df = 49:
+
+| Mean difference TVR − LSM | Std. error | t | p-value (two-sided) | 95% CI |
+|---:|---:|---:|---:|---|
+| 0.0294 | 0.0082 | 3.5594 | 0.0008 | [0.0128, 0.0459] |
+
+The mean difference is significant at the 5% level. Both prices are low-biased estimates on the
+same pricing paths, so TVR learns a better exercise policy than LSM in this setting. The gain is
+small (about 0.03 on a price of about 13.8).
