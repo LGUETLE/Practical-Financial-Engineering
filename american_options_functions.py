@@ -60,7 +60,11 @@ def simulate_correlated_gbm(S0_1: float, S0_2: float, mu_1: float, mu_2: float,
 
 def basis_max(S1: np.ndarray, S2: np.ndarray, K: float) -> np.ndarray:
     """
-    Unscaled basis polynomials (up to degree 3) to prevent data leakage.
+    Regression basis for the continuation value of the max-call: 7 terms.
+
+    Complete degree-2 polynomial in (S1, S2) -- 1, S1, S2, S1^2, S2^2, S1*S2 --
+    plus the intrinsic value max(max(S1, S2) - K, 0). The polynomials are not
+    scaled; K is used only for the intrinsic-value term.
     """
     h = np.maximum(np.maximum(S1, S2) - K, 0.0)
     cols = [
