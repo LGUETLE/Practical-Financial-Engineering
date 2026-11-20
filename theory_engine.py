@@ -186,14 +186,19 @@ def analyze_volatility_sensitivity(S0: float, K: float, T: float, r: float,
     return df_results
 
 def compare_lsm_tvr_theory(S0: float, K: float, T: float, r: float, delta: float, sigma: float, 
-                           m_steps: int, n_paths: int, num_runs: int = 50):
+                           m_steps: int, n_paths: int, num_runs: int = 50,
+                           seed: int = 2026):
     """
-    Empirically compares the variance of Classic LSM and TVR 
+    Empirically compares the variance of Classic LSM and TVR
     under theoretical laboratory conditions across multiple independent runs.
     Now includes 95% Confidence Intervals!
+
+    The global NumPy seed is set once at the start so that the whole sequence
+    of runs is reproducible (migration to np.random.default_rng is planned).
     """
     print(f"\n--- Running Theory Comparison: Classic LSM vs TVR ({num_runs} Runs) ---")
-    
+    np.random.seed(seed)
+
     lsm_prices = []
     tvr_prices = []
     
