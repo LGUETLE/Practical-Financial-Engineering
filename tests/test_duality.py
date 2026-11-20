@@ -1,8 +1,8 @@
 """Duality upper bound: telescoped gap formula, non-negativity, L <= U."""
 import numpy as np
 
-from american_options_functions import lsm_train_max
-from duality import duality_bounds, pathwise_gap
+from maxcall.lsm import lsm_train_max
+from maxcall.duality import duality_bounds, pathwise_gap
 
 
 def _brute_force_gap(h, Q, ex):

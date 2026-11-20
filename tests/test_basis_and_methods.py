@@ -2,9 +2,10 @@
 import numpy as np
 import pytest
 
-from american_options_functions import (METHODS, basis_max, basis_size, lsm_price_max,
-                                        lsm_price_max_cv, lsm_train_max)
-from european import stulz_max_call
+from maxcall.lsm import (METHODS, basis_max, basis_size, lsm_price_max, lsm_price_max_cv,
+                         lsm_train_max)
+from maxcall.simulation import simulate_gbm
+from maxcall.european import stulz_max_call
 
 
 @pytest.mark.parametrize("degree,ncols", [(2, 7), (3, 11)])
@@ -50,7 +51,6 @@ def test_unknown_method_raises(small_paths, bench):
 
 
 def test_same_seed_gives_identical_prices(bench):
-    from american_options_functions import simulate_gbm
     b = bench
 
     def run(seed):
@@ -82,7 +82,6 @@ def test_classic_lsm_and_tvr_differ_only_in_backward_pass(small_paths, bench):
 
 
 def test_control_variate_reduces_variance_and_keeps_mean(bench):
-    from american_options_functions import simulate_gbm
     b = bench
     rng = np.random.default_rng(99)
     t1, t2, p1, p2 = (simulate_gbm(100.0, b["sigma"], b["r"], b["delta"], b["T"], b["m"], n, rng)

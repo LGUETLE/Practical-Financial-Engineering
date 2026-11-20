@@ -19,10 +19,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from american_options_functions import (METHODS, DEFAULT_DEGREE, lsm_price_max, lsm_train_max,
-                                        simulate_gbm)
-from duality import duality_bounds
-from mc_stats import df_to_markdown, fmt_p, holm, paired_t, pitman_morgan, summarize, write_result
+from maxcall.lsm import DEFAULT_DEGREE, METHODS, lsm_price_max, lsm_train_max
+from maxcall.simulation import simulate_gbm
+from maxcall.duality import duality_bounds
+from maxcall.mc_stats import df_to_markdown, fmt_p, holm, paired_t, pitman_morgan, summarize, write_result
 
 STRESS = dict(S0=100.0, K=100.0, T=3.0, r=0.05, delta=0.10, sigma=0.80, m=9)
 CONFIGS = [("LSM", True), ("LSM-all", True), ("TVR-ITM", True), ("TVR", True), ("LSM", False)]
@@ -114,7 +114,8 @@ def plot_variance(df: pd.DataFrame, R: int) -> None:
     plt.close()
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Runs the full analysis of this script and writes results/ and output_*/."""
     t0 = time.perf_counter()
     R = 50
     df, df_t = run_n_convergence_stresstest(R=R)
@@ -153,3 +154,7 @@ if __name__ == "__main__":
     os.makedirs("output_tables", exist_ok=True)
     df.to_csv("output_tables/stresstest.csv", index=False)
     print(f"\nTotal runtime: {time.perf_counter() - t0:.1f} s")
+
+
+if __name__ == "__main__":
+    main()

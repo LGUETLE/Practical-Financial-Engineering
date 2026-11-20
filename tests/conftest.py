@@ -18,7 +18,7 @@ def bench() -> dict:
 @pytest.fixture
 def small_paths(bench):
     """Training and pricing paths at S0 = 100 (1,000 each) from a fixed seed."""
-    from american_options_functions import simulate_gbm
+    from maxcall.simulation import simulate_gbm
     rng = np.random.default_rng(12345)
     b = bench
     args = (100.0, b["sigma"], b["r"], b["delta"], b["T"], b["m"])

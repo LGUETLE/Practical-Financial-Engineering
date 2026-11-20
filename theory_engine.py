@@ -2,21 +2,16 @@ import os
 import time
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import scipy.stats as stats  # <-- NEW: Required for Confidence Intervals
 
-from american_options_functions import (
-    simulate_gbm, 
-    basis_max, 
-    continuation_value,
-    lsm_train_max, 
-    lsm_price_max,
-    lsm_price_max_cv,
-    DEFAULT_DEGREE,
-    DEFAULT_SCALE,
-)
-from european import stulz_max_call, mc_max_call
-from mc_stats import (summarize, paired_t, pitman_morgan, holm, df_to_markdown,
+from maxcall.simulation import simulate_gbm
+from maxcall.lsm import (DEFAULT_DEGREE, DEFAULT_SCALE, continuation_value, lsm_price_max,
+                         lsm_price_max_cv, lsm_train_max)
+from maxcall.european import stulz_max_call, mc_max_call
+from maxcall.mc_stats import (summarize, paired_t, pitman_morgan, holm, df_to_markdown,
                       write_result, fmt_p)
 
 # Glasserman (2003), Example 8.6.1: two independent assets, 9 exercise dates.
@@ -452,7 +447,8 @@ def analyze_convergence(S0: float, K: float, T: float, r: float, delta: float, s
                         m_steps: int, path_counts: list,
                         seed: int = 2026) -> pd.DataFrame:
     """
-    Evaluates empirical convergence and computational time as N grows.
+    Single TVR run per N (N training and N independent pricing paths, generator
+    default_rng([seed, N])): low-biased price, its pricing-path standard error and runtime.
     """
     print("\n--- Running Convergence Analysis ---")
     
@@ -470,16 +466,17 @@ def analyze_convergence(S0: float, K: float, T: float, r: float, delta: float, s
         
         # Algorithm (Explicitly using TVR method)
         model = lsm_train_max(t1, t2, K, r, T, method="TVR")
-        price = lsm_price_max(model, p1, p2)
+        price, se = lsm_price_max(model, p1, p2, return_se=True)
         
         elapsed_time = time.time() - start_time
         
         results.append({
             "Paths (N)": n,
-            "LSM_Price": round(price, 3),
+            "Price": price,
+            "Std_Error": se,
             "Time (sec)": round(elapsed_time, 3)
         })
-        print(f"Computed N={n} in {elapsed_time:.2f}s -> Price: {price:.3f}")
+        print(f"Computed N={n} in {elapsed_time:.2f}s -> Price: {price:.3f} (SE {se:.3f})")
         
     df_results = pd.DataFrame(results)
     return df_results
@@ -540,6 +537,8 @@ def plot_exercise_boundary(model: dict, step_index: int = 4):
     # Save the figure as a high-quality vector graphic for LaTeX
     plt.savefig("output_plots/exercise_boundary.pdf", format="pdf", bbox_inches="tight")
     plt.savefig("output_plots/exercise_boundary.png", format="png", dpi=150, bbox_inches="tight")
+    os.makedirs("results", exist_ok=True)
+    plt.savefig("results/exercise_boundary.png", format="png", dpi=150, bbox_inches="tight")
     plt.close()
 
 def analyze_volatility_sensitivity(S0: float, K: float, T: float, r: float, 
@@ -568,13 +567,14 @@ def analyze_volatility_sensitivity(S0: float, K: float, T: float, r: float,
         
         # Train and price (Explicitly using TVR method)
         model = lsm_train_max(train_S1, train_S2, K, r, T, method="TVR")
-        price_lsm = lsm_price_max(model, price_S1, price_S2)
+        price_lsm, se = lsm_price_max(model, price_S1, price_S2, return_se=True)
         
         results.append({
             "Volatility (sigma)": f"{sig*100:.0f}%",
-            "LSM_Price": round(price_lsm, 3)
+            "Price": price_lsm,
+            "Std_Error": se,
         })
-        print(f"Computed for sigma={sig:.2f} -> Price: {price_lsm:.3f}")
+        print(f"Computed for sigma={sig:.2f} -> Price: {price_lsm:.3f} (SE {se:.3f})")
         
     df_results = pd.DataFrame(results)
     return df_results
@@ -643,93 +643,77 @@ def compare_lsm_tvr_theory(lsm_prices: np.ndarray, tvr_prices: np.ndarray,
 # ==============================================================================
 # MAIN EXECUTION & EXPORT
 # ==============================================================================
-if __name__ == "__main__":
-    
-    # 1. Setup export directories for LaTeX and PDF files
-    print("Setting up export directories...")
+def main() -> None:
+    """Runs all theory analyses on the Glasserman benchmark and writes results/ and output_*/."""
     os.makedirs("output_tables", exist_ok=True)
     os.makedirs("output_plots", exist_ok=True)
 
-    # 2. Define base parameters (matching Glasserman, Example 8.6.1)
-    S0_base = 100.0     # Initial stock price
+    # Base parameters (Glasserman, Example 8.6.1)
+    S0_base = 100.0     # Initial price of both assets
     K_val = 100.0       # Strike price
     T_val = 3.0         # Time to maturity in years
-    r_val = 0.05        # Risk-free interest rate (5%)
-    delta_val = 0.10    # Continuous dividend yield (10%)
-    sigma_val = 0.20    # Volatility (20%)
-    m_steps = 9         # Number of early exercise opportunities
+    r_val = 0.05        # Risk-free interest rate
+    delta_val = 0.10    # Continuous dividend yield
+    sigma_val = 0.20    # Volatility
+    m_steps = 9         # Number of exercise dates
     n_paths = 4000      # Number of paths for both training and pricing
 
-    # 2.1 Basis ablation (degree x scaling, LSM and TVR)
+    # Basis ablation (degree x scaling, LSM and TVR)
     run_basis_ablation(S0=S0_base, R=50, n_paths=n_paths)
 
-    # 3.0 Replicated benchmark at S0 = 90/100/110: 2x2 design (target x sample)
+    # Replicated benchmark at S0 = 90/100/110: 2x2 design (target x sample)
     methods = tuple(METHOD_LABEL)
     bench = run_benchmark_replications(methods, R=50, n_paths=n_paths)
     confirm = confirm_2x2_large_R(S0=S0_base, R=200, n_paths=n_paths)
     analyze_2x2(bench, R=50, n_paths=n_paths, confirm=confirm)
 
-    # 3.0b Classic LSM vs TVR at S0 = 100 on the same replications (variance tests, paired t)
+    # Classic LSM vs TVR at S0 = 100 on the same replications (variance tests, paired t)
     supp = dict(test=confirm["tests"]["TVR - classic LSM"], S0=confirm["S0"], R=confirm["R"],
                 seed=confirm["seed"])
     compare_lsm_tvr_theory(bench[(S0_base, "LSM")], bench[(S0_base, "TVR")],
                            S0=S0_base, n_paths=n_paths, supplementary=supp)
 
-    # 4.0 European closed form (Stulz) vs Monte Carlo, and control variate
+    # European closed form (Stulz) vs Monte Carlo, and control variate
     validate_stulz()
     run_control_variate("TVR", R=50, n_paths=n_paths)
 
-    # 3.1 Run sensitivity analysis (Moneyness) and export to LaTeX
-    print("\nStarting Moneyness Sensitivity Analysis (Table 1)...")
+    # Single runs: moneyness (Glasserman table), volatility, convergence
     df_moneyness = analyze_moneyness_sensitivity(
-        T_val, r_val, delta_val, sigma_val, K_val, m_steps, n_paths
-    )
-    
-    # Export DataFrame directly to a LaTeX table format
-    df_moneyness.to_latex(
-        "output_tables/table_moneyness.tex", 
-        index=False, 
-        float_format="%.3f"
-    )
+        T_val, r_val, delta_val, sigma_val, K_val, m_steps, n_paths)
+    df_moneyness.to_latex("output_tables/table_moneyness.tex", index=False, float_format="%.3f")
     df_moneyness.to_csv("output_tables/table_moneyness.csv", index=False)
 
-    # 3.2 Run Volatility Sensitivity and export
-    print("\nStarting Volatility Sensitivity Analysis (Table 3)...")
     df_volatility = analyze_volatility_sensitivity(
-        S0_base, K_val, T_val, r_val, delta_val, m_steps, n_paths
-    )
-    df_volatility.to_latex(
-        "output_tables/table_volatility.tex", 
-        index=False
-    )
+        S0_base, K_val, T_val, r_val, delta_val, m_steps, n_paths)
+    df_volatility.to_latex("output_tables/table_volatility.tex", index=False, float_format="%.3f")
 
-    # 4. Run convergence analysis (Path count) and export to LaTeX
-    print("\nStarting Convergence Analysis (Table 2)...")
-    path_grid = [1000, 4000, 10000, 40000]
     df_convergence = analyze_convergence(
-        S0_base, K_val, T_val, r_val, delta_val, sigma_val, m_steps, path_grid
-    )
-    
-    df_convergence.to_latex(
-        "output_tables/table_convergence.tex", 
-        index=False, 
-        float_format="%.3f"
-    )
-    print("\nAll tables successfully exported to '/output_tables'.")
+        S0_base, K_val, T_val, r_val, delta_val, sigma_val, m_steps, [1000, 4000, 10000, 40000])
+    df_convergence.to_latex("output_tables/table_convergence.tex", index=False, float_format="%.3f")
 
-    # 5. Generate and export the exercise boundary plot (Contour Plot)
-    print("\nGenerating Exercise Boundary Plot...")
-    
-    # Simulate a high-density path set to ensure a smooth exercise boundary
+    fmt = {"Price": "{:.3f}", "Std_Error": "{:.3f}"}
+    text = ("# Single runs: volatility and path count (TVR policy, S0 = 100)\n\n"
+            "One training and one independent pricing set per row; Std. error = pricing-path "
+            "standard error conditional on the trained policy. Volatility: N = 4,000, generator "
+            "default_rng([2026, round(100 sigma)]). Path count: generator default_rng([2026, N]); "
+            "runtimes are in output_tables/. Generated by `theory_engine.py`.\n\n"
+            + df_to_markdown(df_volatility.rename(columns={"Std_Error": "Std. error"}),
+                             {"Price": "{:.3f}", "Std. error": "{:.3f}"})
+            + "\n\n"
+            + df_to_markdown(df_convergence.drop(columns=["Time (sec)"])
+                             .rename(columns={"Std_Error": "Std. error"}),
+                             {"Paths (N)": "{:,.0f}", "Price": "{:.3f}", "Std. error": "{:.3f}"})
+            + "\n")
+    write_result("single_runs", text)
+
+    # Exercise region of a TVR policy trained on 20,000 paths (Glasserman Figure 8.9)
     rng_plot = np.random.default_rng(1)
     t1_plot = simulate_gbm(S0_base, sigma_val, r_val, delta_val, T_val, m_steps, 20000, rng_plot)
     t2_plot = simulate_gbm(S0_base, sigma_val, r_val, delta_val, T_val, m_steps, 20000, rng_plot)
-    
-    # Train the model specifically for the plot (Explicitly using TVR method)
     plot_model = lsm_train_max(t1_plot, t2_plot, K_val, r_val, T_val, method="TVR")
-    
-    # Call the plotting function 
     plot_exercise_boundary(plot_model, step_index=4)
-    print("Plot successfully saved to '/output_plots'.")
-    
-    print("\nExecution finished successfully.")
+    print("\ntheory_engine finished.")
+
+
+if __name__ == "__main__":
+    main()

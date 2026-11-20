@@ -95,7 +95,7 @@ class HistoricalDataFetcher:
         return params
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # python -m maxcall.data
     for t1, t2, cls in (("AAPL", "MSFT", "stock"), ("BTC-USD", "ETH-USD", "crypto")):
         f = HistoricalDataFetcher(t1, t2, cls)
         f.calibrate(f.fetch_data())

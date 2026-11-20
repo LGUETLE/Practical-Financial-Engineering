@@ -22,11 +22,11 @@ import numpy as np
 import pandas as pd
 import scipy.stats as stats
 
-from american_options_functions import (METHODS, apply_policy, lsm_train_max,
-                                        simulate_correlated_gbm)
-from data_fetcher import HistoricalDataFetcher
-from european import stulz_max_call
-from mc_stats import df_to_markdown, fmt_p, holm, paired_t, summarize, write_result
+from maxcall.lsm import METHODS, apply_policy, lsm_train_max
+from maxcall.simulation import simulate_correlated_gbm
+from maxcall.data import HistoricalDataFetcher
+from maxcall.european import stulz_max_call
+from maxcall.mc_stats import df_to_markdown, fmt_p, holm, paired_t, summarize, write_result
 
 CONTRACT = dict(S0=100.0, K=100.0, r=0.05, T=1.0, m=12, delta=0.0)
 SCENARIOS = [("tech", "AAPL", "MSFT", "stock"), ("crypto", "BTC-USD", "ETH-USD", "crypto")]
@@ -174,7 +174,8 @@ def run_sigma_sensitivity(tech_vol: float, crypto_vol: float,
     return df, df_con
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Runs the full analysis of this script and writes results/ and output_*/."""
     t_start = time.perf_counter()
     c = CONTRACT
     calib, tables, all_prices = {}, [], {}
@@ -236,3 +237,7 @@ if __name__ == "__main__":
     df_all.to_csv("output_tables/empirical_bias.csv", index=False)
     df_sens.to_csv("output_tables/empirical_sigma_sensitivity.csv", index=False)
     print(f"\nTotal runtime: {time.perf_counter() - t_start:.1f} s")
+
+
+if __name__ == "__main__":
+    main()

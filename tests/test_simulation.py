@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from american_options_functions import simulate_correlated_gbm, simulate_gbm
+from maxcall.simulation import simulate_correlated_gbm, simulate_gbm
 
 
 @pytest.mark.parametrize("S0,sigma,r,delta,T", [(100.0, 0.2, 0.05, 0.10, 3.0),

@@ -2,8 +2,9 @@
 import numpy as np
 import pytest
 
-from american_options_functions import lsm_price_max, lsm_train_max, simulate_gbm
-from duality import duality_bounds
+from maxcall.lsm import lsm_price_max, lsm_train_max
+from maxcall.simulation import simulate_gbm
+from maxcall.duality import duality_bounds
 
 
 def _tvr_model_and_price(bench, S0, n_train, n_price, seed):

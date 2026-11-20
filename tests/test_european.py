@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from scipy.stats import multivariate_normal
 
-from european import bs_call, bvn_cdf, margrabe_max, mc_max_call, stulz_max_call
+from maxcall.european import bs_call, bvn_cdf, margrabe_max, mc_max_call, stulz_max_call
 
 CASES = [
     # S1, S2, K, r, T, q1, q2, sigma1, sigma2, rho

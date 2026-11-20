@@ -26,8 +26,7 @@ import time
 
 import numpy as np
 
-from american_options_functions import (apply_policy, continuation_value,
-                                        discounted_policy_payoffs)
+from .lsm import apply_policy, continuation_value, discounted_policy_payoffs
 
 
 def _simulate_from(S1: np.ndarray, S2: np.ndarray, n_steps: int, dt: float, r: float,
